@@ -20,4 +20,4 @@ rm(p,PKG)
 ## Snapshot of libraries used
 renv::snapshot()
 
-#test
+#testing

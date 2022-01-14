@@ -107,6 +107,7 @@ p1<-tm_shape(eeza) +
   tm_layout(legend.outside = TRUE)
 p1
 
+writeRaster(dfbeez[[3]],"windspeed.tif")
 # # EEZA in meters projected and buffered
 # eezaUTM18N<-st_transform(eeza,crs = 32618)
 # eezaUTM18N<-st_buffer(eezaUTM18N,dist = 35000)

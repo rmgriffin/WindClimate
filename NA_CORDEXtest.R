@@ -8,7 +8,7 @@ library(renv)
 ## Packages
 #Sys.setenv(RENV_PATHS_RTOOLS = "C:/rtools40/") # https://github.com/rstudio/renv/issues/225
 
-PKG <- c("raster","sf","tidyverse","rgdal","ncdf4","RColorBrewer","lattice","googledrive","tmap")
+PKG <- c("raster","sf","tidyverse","rgdal","ncdf4","RColorBrewer","lattice","googledrive","tmap","chron")
 
 for (p in PKG) {
   if(!require(p,character.only = TRUE)) {  
@@ -70,34 +70,28 @@ tunits
 ws<-ncvar_get(df,"sfcWind")
 dim(ws)
 
-# Visualizing data (one slice)
-slice1<-ws[,,1]
-image(x,y,slice1, col=rev(brewer.pal(10,"RdBu"))) # Plot 1
-grid<-expand.grid(lon=x, lat=y)
-cutpts<-seq(0,30,3)
-levelplot(slice1 ~ lon * lat, data=grid, at=cutpts, cuts=9, pretty=T, 
-          col.regions=(rev(brewer.pal(11,"RdBu")))) # Plot 2
-
 # Creating a dataframe from one slice
 xy<-as.matrix(expand.grid(x,y))
 dim(xy)
+slice1<-ws[,,1]
 vec1<-as.vector(slice1)
 dfs1<-data.frame(cbind(xy,vec1))
 names(dfs1)<-c("lon","lat","ws1") # names(tmp_df01) <- c("lon","lat",paste(dname,as.character(m), sep="_"))
 
-# Creating a dataframe from whole array
-dfws<-as.vector(ws)
-dfws<-matrix(dfws,nrow=nx*ny,ncol=nt)
-dfws<-data.frame(cbind(xy,dfws)) # x by y by t dataframe
-names(dfws)<-c("lon","lat",paste("t",as.character(t), sep=""))
-
-## Geospatial analysis
+## Plotting
 # US EEZ - Atlantic Coast
 eeza<-st_read("./Data/eez_atlantic.gpkg") # US EEZ vector https://www.marineregions.org/gazetteer.php?p=details&id=8456
 eeza<-st_transform(eeza,st_crs(dfb))
 
 # Mask raster brick by EEZ
 system.time(dfbeez<-mask(dfb,eeza))
+
+# Visualizing data (one slice)
+image(x,y,slice1, col=rev(brewer.pal(10,"RdBu"))) # Plot 1
+grid<-expand.grid(lon=x, lat=y)
+cutpts<-seq(0,30,3)
+levelplot(slice1 ~ lon * lat, data=grid, at=cutpts, cuts=9, pretty=T, 
+          col.regions=(rev(brewer.pal(11,"RdBu")))) # Plot 2
 
 # Plot raster and eez
 p1<-tm_shape(eeza) +
@@ -113,3 +107,57 @@ writeRaster(dfbeez[[3]],"windspeed.tif")
 # eezaUTM18N<-st_buffer(eezaUTM18N,dist = 35000)
 # st_write(eezaUTM18N,"./eezaUTM18N.gpkg")
 
+## Geospatial analysis
+# Creating a dataframe from whole array
+dfws<-as.vector(ws)
+rm(ws)
+dfws<-matrix(dfws,nrow=nx*ny,ncol=nt)
+dfws<-data.frame(cbind(xy,dfws)) # x by y by t dataframe
+names(dfws)<-c("lon","lat",paste("t",as.character(t), sep=""))
+# Lots of NAs due to missing data, remove all rows that only have NAs
+dfws<-dfws[complete.cases(dfws),]
+# Prep for dealing with time units
+tustr<-strsplit(tunits$value, " ")
+tdstr<-strsplit(unlist(tustr)[3], "-")
+tmonth<-as.integer(unlist(tdstr)[2])
+tday<-as.integer(unlist(tdstr)[3])
+tyear<-as.integer(unlist(tdstr)[1])
+
+# Cannot transform whole dataset wide to long, takes up too much memory, need to break into time chunks
+dates<-as.data.frame(chron(t,origin=c(tmonth, tday, tyear))) # date observation 10227 runs through 1977 and will break the dataset up into two pieces that are small enough to fit in memory 
+# Wide to long
+# dfwss<-dfws[,1:10227] # test (10000 columns takes 27s and is 33GB storage)
+# system.time(dfwsl<-dfwss %>% 
+#   pivot_longer(cols = 3:10227, names_to = "t", names_prefix = "t", values_to = "ws"))
+system.time(dfwsl<-dfws %>% 
+   pivot_longer(cols = 3:20442, names_to = "t", names_prefix = "t", values_to = "ws"))
+rm(dfws)
+# dfwsl$t<-as.numeric(dfwsl$t)
+system.time(dfwsl$t<-chron(dfwsl$t,origin=c(tmonth, tday, tyear))) # Date
+system.time(dfwsl$year<-years(dfwsl$t)) # Extracting year factor
+
+# Daily kilowatt hours
+W<-18 # Number of turbines
+TT<-3.6 # Turbine rated power  
+RD<-120 # Rotor diameter
+A<-0.97 # Wind Availability (% as fraction)
+EL<-0.98 # Wind Energy Losses (% as fraction)
+
+dfwsl$kWh<-24*(TT*1000)*(.087*dfwsl$ws-((TT*1000)/RD^2))*A*EL*W
+
+
+# Annual aggregation
+dfws1<-dfwsl %>% group_by(lon, lat, year) %>% summarise(kWh = sum(kWh))
+
+# Wide to long
+dfwss<-cbind(dfws[,1:2],dfws[,10228:20440])
+system.time(dfwsl<-dfwss %>% 
+              pivot_longer(cols = 3:10215, names_to = "t", names_prefix = "t", values_to = "ws"))
+dfwsl$t<-as.numeric(dfwsl$t)
+system.time(dfwsl$t<-chron(dfwsl$t,origin=c(tmonth, tday, tyear))) # Date
+system.time(dfwsl$year<-years(dfwsl$t)) # Extracting year factor
+
+dfwsl$kWh<-24*(TT*1000)*(.087*dfwsl$ws-((TT*1000)/RD^2))*A*EL*W
+
+# Annual aggregation
+dfws2<-dfwsl %>% group_by(lon, lat, year) %>% summarise(kWh = sum(kWh))

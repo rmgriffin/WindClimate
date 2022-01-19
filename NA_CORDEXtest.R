@@ -123,41 +123,36 @@ tmonth<-as.integer(unlist(tdstr)[2])
 tday<-as.integer(unlist(tdstr)[3])
 tyear<-as.integer(unlist(tdstr)[1])
 
-# Cannot transform whole dataset wide to long, takes up too much memory, need to break into time chunks
-dates<-as.data.frame(chron(t,origin=c(tmonth, tday, tyear))) # date observation 10227 runs through 1977 and will break the dataset up into two pieces that are small enough to fit in memory 
-# Wide to long
-# dfwss<-dfws[,1:10227] # test (10000 columns takes 27s and is 33GB storage)
-# system.time(dfwsl<-dfwss %>% 
-#   pivot_longer(cols = 3:10227, names_to = "t", names_prefix = "t", values_to = "ws"))
-system.time(dfwsl<-dfws %>% 
-   pivot_longer(cols = 3:20442, names_to = "t", names_prefix = "t", values_to = "ws"))
-rm(dfws)
-# dfwsl$t<-as.numeric(dfwsl$t)
-system.time(dfwsl$t<-chron(dfwsl$t,origin=c(tmonth, tday, tyear))) # Date
-system.time(dfwsl$year<-years(dfwsl$t)) # Extracting year factor
-
-# Daily kilowatt hours
+# Power generation calculation
 W<-18 # Number of turbines
 TT<-3.6 # Turbine rated power  
 RD<-120 # Rotor diameter
 A<-0.97 # Wind Availability (% as fraction)
 EL<-0.98 # Wind Energy Losses (% as fraction)
 
-dfwsl$kWh<-24*(TT*1000)*(.087*dfwsl$ws-((TT*1000)/RD^2))*A*EL*W
+dates<-as.data.frame(chron(t,origin=c(tmonth, tday, tyear))) # Cannot transform whole dataset wide to long, takes up too much memory, breaking into annual time chunks, running analysis, and reassembling
+dates$year<-years(dates$`chron(t, origin = c(tmonth, tday, tyear))`)
+dates$year<-as.numeric(dates$year)
+xy<-dfws[,1:2]
+dfws<-dfws[,3:ncol(dfws)]
+switches<-c(1,1+which(diff(dates$year)!=0)) # https://stackoverflow.com/questions/20896242/finding-the-index-of-first-changes-in-the-elements-of-a-vector
+switches2<-c(switches[2:length(switches)],length(dates$year))
+powerbreak<-function(arg_1, arg_2) {
+  dfwss<-dfws[,arg_1:(arg_2-1)]
+  dfwss<-cbind(xy,dfwss)
+  system.time(dfwsl<-dfwss %>% 
+                pivot_longer(cols = 3:ncol(dfwss), names_to = "t", names_prefix = "t", values_to = "ws"))
+  dfwsl$t<-as.numeric(dfwsl$t)
+  system.time(dfwsl$t<-chron(dfwsl$t,origin=c(tmonth, tday, tyear))) # Date
+  system.time(dfwsl$year<-years(dfwsl$t)) # Extracting year factor
+  
+  dfwsl$kWh<-24*(TT*1000)*(.087*dfwsl$ws-((TT*1000)/RD^2))*A*EL*W # Daily kWh
+  dfwsannual<-dfwsl %>% group_by(lon, lat, year) %>% summarise(kWh = sum(kWh)) # Annual aggregation
+  dfwsannual<-as.data.frame(dfwsannual)
+  dfwsannual$year<-as.character(dfwsannual$year)
+  return(dfwsannual)
+}
+
+system.time(dfy<-map2_df(switches,switches2,powerbreak)) # Energy generation at annual time step for each location (speed up with furrr?)
 
 
-# Annual aggregation
-dfws1<-dfwsl %>% group_by(lon, lat, year) %>% summarise(kWh = sum(kWh))
-
-# Wide to long
-dfwss<-cbind(dfws[,1:2],dfws[,10228:20440])
-system.time(dfwsl<-dfwss %>% 
-              pivot_longer(cols = 3:10215, names_to = "t", names_prefix = "t", values_to = "ws"))
-dfwsl$t<-as.numeric(dfwsl$t)
-system.time(dfwsl$t<-chron(dfwsl$t,origin=c(tmonth, tday, tyear))) # Date
-system.time(dfwsl$year<-years(dfwsl$t)) # Extracting year factor
-
-dfwsl$kWh<-24*(TT*1000)*(.087*dfwsl$ws-((TT*1000)/RD^2))*A*EL*W
-
-# Annual aggregation
-dfws2<-dfwsl %>% group_by(lon, lat, year) %>% summarise(kWh = sum(kWh))

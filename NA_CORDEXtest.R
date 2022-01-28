@@ -8,7 +8,7 @@ library(renv)
 ## Packages
 #Sys.setenv(RENV_PATHS_RTOOLS = "C:/rtools40/") # https://github.com/rstudio/renv/issues/225
 
-PKG <- c("raster","sf","tidyverse","rgdal","ncdf4","RColorBrewer","lattice","googledrive","tmap","chron")
+PKG <- c("raster","sf","tidyverse","rgdal","ncdf4","RColorBrewer","lattice","googledrive","tmap","chron","furrr","nngeo")
 
 for (p in PKG) {
   if(!require(p,character.only = TRUE)) {  
@@ -78,35 +78,6 @@ vec1<-as.vector(slice1)
 dfs1<-data.frame(cbind(xy,vec1))
 names(dfs1)<-c("lon","lat","ws1") # names(tmp_df01) <- c("lon","lat",paste(dname,as.character(m), sep="_"))
 
-## Plotting
-# US EEZ - Atlantic Coast
-eeza<-st_read("./Data/eez_atlantic.gpkg") # US EEZ vector https://www.marineregions.org/gazetteer.php?p=details&id=8456
-eeza<-st_transform(eeza,st_crs(dfb))
-
-# Mask raster brick by EEZ
-system.time(dfbeez<-mask(dfb,eeza))
-
-# Visualizing data (one slice)
-image(x,y,slice1, col=rev(brewer.pal(10,"RdBu"))) # Plot 1
-grid<-expand.grid(lon=x, lat=y)
-cutpts<-seq(0,30,3)
-levelplot(slice1 ~ lon * lat, data=grid, at=cutpts, cuts=9, pretty=T, 
-          col.regions=(rev(brewer.pal(11,"RdBu")))) # Plot 2
-
-# Plot raster and eez
-p1<-tm_shape(eeza) +
-  tm_borders(col = "black", lty = "dashed")+
-  tm_shape(dfbeez[[3]]) +
-  tm_raster(palette = "Greens", colorNA = NULL, title = "Wind Speed (m/s)") + 
-  tm_layout(legend.outside = TRUE)
-p1
-
-writeRaster(dfbeez[[3]],"windspeed.tif")
-# # EEZA in meters projected and buffered
-# eezaUTM18N<-st_transform(eeza,crs = 32618)
-# eezaUTM18N<-st_buffer(eezaUTM18N,dist = 35000)
-# st_write(eezaUTM18N,"./eezaUTM18N.gpkg")
-
 ## Geospatial analysis
 # Creating a dataframe from whole array
 dfws<-as.vector(ws)
@@ -153,6 +124,69 @@ powerbreak<-function(arg_1, arg_2) {
   return(dfwsannual)
 }
 
-system.time(dfy<-map2_df(switches,switches2,powerbreak)) # Energy generation at annual time step for each location (speed up with furrr?)
 
+plan(multisession, workers = 2)
+options(future.globals.maxSize= 891289600000)
+system.time(dfy<-future_map2_dfr(switches,switches2,powerbreak,.progress = TRUE)) # Energy generation at annual time step for each location
+rm(dfws)
+
+# Costs
+dfy<-st_as_sf(dfy, coords = c("lon", "lat"), crs=st_crs(dfb), remove = FALSE) # Convert annual energy generation df to sf object, don't remove coordinate columns
+dfy<-st_transform(dfy,crs = st_crs(3857)) # Reprojecting all layers to EPSG:3857 WGS/Pseudo Mercator - seems consistent with TNC marine mapper
+cst<-st_read("./Data/global_polygon.gpkg")
+cst<-st_transform(cst,crs = st_crs(3857))
+eeza<-st_read("./Data/eez_atlantic.gpkg") # US EEZ vector https://www.marineregions.org/gazetteer.php?p=details&id=8456
+eeza<-st_transform(eeza,st_crs(3857))
+eeza<-eeza[1:2]
+
+system.time(dfy<-st_join(dfy,eeza)) # Keeping only those observations that are within the US Atlantic EEZ
+dfy<-dfy %>% drop_na()
+
+eeza10kmbuff<-st_buffer(eeza,dist = 10000)
+csteeza10kmbuff<-st_intersection(cst,eeza10kmbuff) # Creating a limited nearshore polygon to search over for nearest landing point for wind points
+
+system.time(dfy$nearest<-st_nearest_feature(dfy,csteeza10kmbuff))
+
+#csteeza10kmbuff<-csteeza10kmbuff[1,] # Only mainland connection points
+
+system.time(dfy$dist<-as.vector(st_distance(dfy, csteeza10kmbuff[dfy$nearest,], by_element=TRUE)))
+
+
+
+ggplot() +
+  geom_sf(data = csteeza10kmbuff) +
+  geom_sf(data = xy)
+  
+system.time(xy2<-nngeo::st_nn(xy,csteeza10kmbuff,returnDist = TRUE))
+
+xy3<-cbind(xy2$nn,xy2$dist)
+# LCOE
+# Revenue
+# NPV
+
+## Plotting
+
+# Mask raster brick by EEZ
+system.time(dfbeez<-mask(dfb,eeza))
+
+# Visualizing data (one slice)
+image(x,y,slice1, col=rev(brewer.pal(10,"RdBu"))) # Plot 1
+grid<-expand.grid(lon=x, lat=y)
+cutpts<-seq(0,30,3)
+levelplot(slice1 ~ lon * lat, data=grid, at=cutpts, cuts=9, pretty=T, 
+          col.regions=(rev(brewer.pal(11,"RdBu")))) # Plot 2
+
+# Plot raster and eez
+p1<-tm_shape(eeza) +
+  tm_borders(col = "black", lty = "dashed")+
+  tm_shape(dfbeez[[3]]) +
+  tm_raster(palette = "Greens", colorNA = NULL, title = "Wind Speed (m/s)") + 
+  tm_layout(legend.outside = TRUE)
+p1
+
+writeRaster(dfbeez[[3]],"windspeed.tif")
+# # EEZA in meters projected and buffered
+# eezaUTM18N<-st_transform(eeza,crs = 32618)
+# eezaUTM18N<-st_buffer(eezaUTM18N,dist = 35000)
+# st_write(eezaUTM18N,"./eezaUTM18N.gpkg")
 

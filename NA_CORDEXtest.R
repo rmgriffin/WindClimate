@@ -127,7 +127,7 @@ powerbreak<-function(arg_1, arg_2) {
 
 plan(multisession, workers = 2)
 options(future.globals.maxSize= 891289600000)
-system.time(dfy<-future_map2_dfr(switches,switches2,powerbreak,.progress = TRUE)) # Energy generation at annual time step for each location
+system.time(dfy<-future_map2_dfr(switches,switches2,powerbreak)) # Energy generation at annual time step for each location
 rm(dfws)
 
 # Costs
@@ -141,25 +141,34 @@ eeza<-eeza[1:2]
 
 system.time(dfy<-st_join(dfy,eeza)) # Keeping only those observations that are within the US Atlantic EEZ
 dfy<-dfy %>% drop_na()
+dfy<-dfy %>% 
+  select (-c(geoname, mrgid))
 
 eeza10kmbuff<-st_buffer(eeza,dist = 10000)
 csteeza10kmbuff<-st_intersection(cst,eeza10kmbuff) # Creating a limited nearshore polygon to search over for nearest landing point for wind points
 
-system.time(dfy$nearest<-st_nearest_feature(dfy,csteeza10kmbuff))
+xy<-st_as_sf(xy, coords = c("lon", "lat"), crs=st_crs(dfb), remove = FALSE) # Unique wind data points 
+xy<-st_transform(xy,crs = st_crs(3857))
+system.time(xy<-st_join(xy,eeza)) # Keeping only those observations that are within the US Atlantic EEZ
+xy<-xy %>% drop_na()
+xy<-xy %>% 
+  select (-c(geoname, mrgid))
 
+system.time(xy$nearest<-st_nearest_feature(xy,csteeza10kmbuff))
+system.time(xy$dist<-as.vector(st_distance(xy, csteeza10kmbuff[xy$nearest,], by_element=TRUE)))
 #csteeza10kmbuff<-csteeza10kmbuff[1,] # Only mainland connection points
 
-system.time(dfy$dist<-as.vector(st_distance(dfy, csteeza10kmbuff[dfy$nearest,], by_element=TRUE)))
+dfy2<-dfy %>% 
+  left_join(.,st_drop_geometry(xy), by = c("lon","lat")) # Merge using unique wind data points is much quicker than finding distance of nearest for all points for all years
 
+#system.time(dfy$nearest<-st_nearest_feature(dfy,csteeza10kmbuff))
+#system.time(dfy$dist<-as.vector(st_distance(dfy, csteeza10kmbuff[dfy$nearest,], by_element=TRUE)))
 
+# ggplot() + # Quick plot of data points
+#   geom_sf(data = csteeza10kmbuff) +
+#   geom_sf(data = xy)
 
-ggplot() +
-  geom_sf(data = csteeza10kmbuff) +
-  geom_sf(data = xy)
   
-system.time(xy2<-nngeo::st_nn(xy,csteeza10kmbuff,returnDist = TRUE))
-
-xy3<-cbind(xy2$nn,xy2$dist)
 # LCOE
 # Revenue
 # NPV

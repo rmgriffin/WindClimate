@@ -43,11 +43,19 @@ download.file("ftp://anonymous:anonymous@ftp2.psl.noaa.gov/pub/Public/dswales/wr
 # Reading data
 df<-nc_open("./Data/wrfout_d01_2007.nc")
 df1<-nc_open("./Data/sfcWind.hist.GFDL-ESM2M.RegCM4.day.NAM-22i.raw.nc")
-dfb<-brick("./Data/wrfout_d01_2007.nc")
+# dfb<-brick("./Data/wrfout_d01_2007.nc", crs = 4326)
+# dfb<-projectRaster(dfb, crs = 3857)
+cst<-st_read("./Data/global_polygon.gpkg")
+cst<-st_transform(cst,crs = st_crs(3857))
+eeza<-st_read("./Data/eez_atlantic.gpkg") # US EEZ vector https://www.marineregions.org/gazetteer.php?p=details&id=8456
+eeza<-st_transform(eeza,st_crs(3857))
+eeza<-eeza[1:2]
 print(df)
 
-p1<-tm_shape(dfb[[1]]) +
+p1<-tm_shape(dfb[[1003]]) +
   tm_raster(palette = "Greens", colorNA = NULL, title = "Wind Speed (m/s)") + 
+  # tm_shape(cst) +
+  # tm_borders(col = "black", lty = "dashed") +
   tm_layout(legend.outside = TRUE)
 p1
 
@@ -62,8 +70,17 @@ head(x)
 
 print(c(nx,ny))
 
-t<-ncvar_get(df,"year")
-head(t)
+year<-ncvar_get(df,"year")
+head(year)
+
+day<-ncvar_get(df,"day")
+head(day)
+
+hour<-ncvar_get(df,"hour") # One observation every 3 hours
+head(hour)
+
+z<-ncvar_get(df,"level")
+head(z)
 
 tunits<-ncatt_get(df,"time","units")
 nt<-dim(t)
@@ -71,13 +88,43 @@ nt
 tunits
 
 # Getting data
-ws<-ncvar_get(df,"sfcWind")
-dim(ws)
+wsu<-ncvar_get(df,"u")
+dim(wsu)
+head(wsu)
+wsv<-ncvar_get(df,"v")
+dim(wsv)
+head(wsv)
 
-# Creating a dataframe from one slice
-xy<-as.matrix(expand.grid(x,y))
-dim(xy)
-slice1<-ws[,,1]
-vec1<-as.vector(slice1)
-dfs1<-data.frame(cbind(xy,vec1))
-names(dfs1)<-c("lon","lat","ws1") # names(tmp_df01) <- c("lon","lat",paste(dname,as.character(m), sep="_"))
+
+# Testing domain
+x2<-as.matrix(expand.grid(x))
+y2<-as.matrix(expand.grid(y))
+xy<-as.data.frame(cbind(x2,y2))
+names(xy)<-c("lon","lat")
+# xy<-st_as_sf(xy, coords = c("lon", "lat"),crs=4269, remove = FALSE)
+# xy<-st_transform(xy,st_crs(3857))
+
+ggplot() + # Quick plot of data points
+  geom_sf(data = cst) +
+  geom_sf(data = xy)
+
+# Creating a dataframe from whole array
+dfws<-as.vector(ws)
+#rm(ws)
+expand.grid.df<-function(...) Reduce(function(...) merge(..., by=NULL), list(...)) # https://stackoverflow.com/questions/11693599/alternative-to-expand-grid-for-data-frames
+system.time(xyz<-expand.grid.df(xy,z,day))
+df<-cbind(xyz,dfws)
+
+# Summarize daily
+
+dfws<-matrix(dfws,nrow=nx*ny,ncol=nt)
+dfws<-data.frame(cbind(xy,dfws)) # x by y by t dataframe
+names(dfws)<-c("lon","lat",paste("t",as.character(t), sep=""))
+# Lots of NAs due to missing data, remove all rows that only have NAs
+dfws<-dfws[complete.cases(dfws),]
+# Prep for dealing with time units
+tustr<-strsplit(tunits$value, " ")
+tdstr<-strsplit(unlist(tustr)[3], "-")
+tmonth<-as.integer(unlist(tdstr)[2])
+tday<-as.integer(unlist(tdstr)[3])
+tyear<-as.integer(unlist(tdstr)[1])

@@ -88,10 +88,10 @@ nt
 tunits
 
 # Getting data
-wsu<-ncvar_get(df,"u")
+wsu<-as.vector(ncvar_get(df,"u"))
 dim(wsu)
 head(wsu)
-wsv<-ncvar_get(df,"v")
+wsv<-as.vector(ncvar_get(df,"v"))
 dim(wsv)
 head(wsv)
 
@@ -109,22 +109,7 @@ ggplot() + # Quick plot of data points
   geom_sf(data = xy)
 
 # Creating a dataframe from whole array
-dfws<-as.vector(ws)
-#rm(ws)
+
 expand.grid.df<-function(...) Reduce(function(...) merge(..., by=NULL), list(...)) # https://stackoverflow.com/questions/11693599/alternative-to-expand-grid-for-data-frames
 system.time(xyz<-expand.grid.df(xy,z,day))
-df<-cbind(xyz,dfws)
-
-# Summarize daily
-
-dfws<-matrix(dfws,nrow=nx*ny,ncol=nt)
-dfws<-data.frame(cbind(xy,dfws)) # x by y by t dataframe
-names(dfws)<-c("lon","lat",paste("t",as.character(t), sep=""))
-# Lots of NAs due to missing data, remove all rows that only have NAs
-dfws<-dfws[complete.cases(dfws),]
-# Prep for dealing with time units
-tustr<-strsplit(tunits$value, " ")
-tdstr<-strsplit(unlist(tustr)[3], "-")
-tmonth<-as.integer(unlist(tdstr)[2])
-tday<-as.integer(unlist(tdstr)[3])
-tyear<-as.integer(unlist(tdstr)[1])
+df<-cbind(xyz,wsu,wsv)

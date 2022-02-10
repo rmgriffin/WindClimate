@@ -42,7 +42,7 @@ download.file("ftp://anonymous:anonymous@ftp2.psl.noaa.gov/pub/Public/dswales/wr
 ## Actions with a NetCDF
 # Reading data
 df<-nc_open("./Data/wrfout_d01_2007.nc")
-df1<-nc_open("./Data/sfcWind.hist.GFDL-ESM2M.RegCM4.day.NAM-22i.raw.nc")
+#df1<-nc_open("./Data/sfcWind.hist.GFDL-ESM2M.RegCM4.day.NAM-22i.raw.nc")
 # dfb<-brick("./Data/wrfout_d01_2007.nc", crs = 4326)
 # dfb<-projectRaster(dfb, crs = 3857)
 cst<-st_read("./Data/global_polygon.gpkg")
@@ -52,12 +52,12 @@ eeza<-st_transform(eeza,st_crs(3857))
 eeza<-eeza[1:2]
 print(df)
 
-p1<-tm_shape(dfb[[1003]]) +
-  tm_raster(palette = "Greens", colorNA = NULL, title = "Wind Speed (m/s)") + 
-  # tm_shape(cst) +
-  # tm_borders(col = "black", lty = "dashed") +
-  tm_layout(legend.outside = TRUE)
-p1
+# p1<-tm_shape(dfb[[1003]]) +
+#   tm_raster(palette = "Greens", colorNA = NULL, title = "Wind Speed (m/s)") + 
+#   # tm_shape(cst) +
+#   # tm_borders(col = "black", lty = "dashed") +
+#   tm_layout(legend.outside = TRUE)
+# p1
 
 # Exploring variables
 y<-ncvar_get(df,"lat")
@@ -82,34 +82,31 @@ head(hour)
 z<-ncvar_get(df,"level")
 head(z)
 
-tunits<-ncatt_get(df,"time","units")
-nt<-dim(t)
-nt
-tunits
-
 # Getting data
 wsu<-as.vector(ncvar_get(df,"u"))
-dim(wsu)
 head(wsu)
 wsv<-as.vector(ncvar_get(df,"v"))
-dim(wsv)
 head(wsv)
 
-
-# Testing domain
+# Domain
 x2<-as.matrix(expand.grid(x))
 y2<-as.matrix(expand.grid(y))
 xy<-as.data.frame(cbind(x2,y2))
 names(xy)<-c("lon","lat")
-# xy<-st_as_sf(xy, coords = c("lon", "lat"),crs=4269, remove = FALSE)
-# xy<-st_transform(xy,st_crs(3857))
+xy<-st_as_sf(xy, coords = c("lon", "lat"),crs=4269, remove = FALSE)
+xy<-st_transform(xy,st_crs(3857))
 
-ggplot() + # Quick plot of data points
+ggplot() + # Plot of observation locations within domain
   geom_sf(data = cst) +
   geom_sf(data = xy)
 
 # Creating a dataframe from whole array
-
+ws<-sqrt(wsu^2+wsv^2)
+hist(ws, xlim = c(0, 100), breaks = seq(0,max(ws)+2,2))
+max(ws)
+length(ws[ws > 32.7])/length(ws) # Ratio of observations greater than hurricane speed
+wsday<-colMeans(matrix(ws, nrow=8)) # A vector of daily mean wind speeds, summarize from a vector of 3 hr wind speeds
 expand.grid.df<-function(...) Reduce(function(...) merge(..., by=NULL), list(...)) # https://stackoverflow.com/questions/11693599/alternative-to-expand-grid-for-data-frames
-system.time(xyz<-expand.grid.df(xy,z,day))
-df<-cbind(xyz,wsu,wsv)
+system.time(xyz<-expand.grid.df(xy,z,seq(1,365,1))) # Creating a long format dataframe that is # of grid points * # of hub heights * # of days
+xyz$wsday<-wsday
+head(xyz)

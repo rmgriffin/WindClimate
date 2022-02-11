@@ -44,7 +44,7 @@ download.file("https://tds.ucar.edu/thredds/fileServer/datazone/cordex/data/raw/
 ## Actions with a NetCDF
 # Reading data
 df<-nc_open("./Data/sfcWind.hist.GFDL-ESM2M.RegCM4.day.NAM-22i.raw.nc")
-dfb<-brick("./Data/sfcWind.hist.GFDL-ESM2M.RegCM4.day.NAM-22i.raw.nc")
+#dfb<-brick("./Data/sfcWind.hist.GFDL-ESM2M.RegCM4.day.NAM-22i.raw.nc")
 print(df)
 
 # Exploring variables
@@ -70,16 +70,10 @@ tunits
 ws<-ncvar_get(df,"sfcWind")
 dim(ws)
 
-# Creating a dataframe from one slice
-xy<-as.matrix(expand.grid(x,y))
-dim(xy)
-slice1<-ws[,,1]
-vec1<-as.vector(slice1)
-dfs1<-data.frame(cbind(xy,vec1))
-names(dfs1)<-c("lon","lat","ws1") # names(tmp_df01) <- c("lon","lat",paste(dname,as.character(m), sep="_"))
-
 ## Geospatial analysis
 # Creating a dataframe from whole array
+xy<-as.matrix(expand.grid(x,y))
+dim(xy)
 dfws<-as.vector(ws)
 rm(ws)
 dfws<-matrix(dfws,nrow=nx*ny,ncol=nt)
@@ -118,20 +112,22 @@ powerbreak<-function(arg_1, arg_2) {
   system.time(dfwsl$year<-years(dfwsl$t)) # Extracting year factor
   
   dfwsl$kWh<-24*(TT*1000)*(.087*dfwsl$ws-((TT*1000)/RD^2))*A*EL*W # Daily kWh
-  dfwsannual<-dfwsl %>% group_by(lon, lat, year) %>% summarise(kWh = sum(kWh)) # Annual aggregation
+  dfwsannual<-dfwsl %>% group_by(lon, lat, year) %>% summarise(kWh = sum(kWh)) # Annual aggregation of kWh
+  ws<-dfwsl %>% group_by(lon, lat, year) %>% summarise(ws = mean(ws)) # Annual mean wind speed
   dfwsannual<-as.data.frame(dfwsannual)
+  ws<-as.data.frame(ws)
   dfwsannual$year<-as.character(dfwsannual$year)
+  dfwsannual$ws<-ws$ws
   return(dfwsannual)
 }
-
 
 plan(multisession, workers = 2)
 options(future.globals.maxSize= 891289600000)
 system.time(dfy<-future_map2_dfr(switches,switches2,powerbreak)) # Energy generation at annual time step for each location
 rm(dfws)
 
-# Costs
-dfy<-st_as_sf(dfy, coords = c("lon", "lat"), crs=st_crs(dfb), remove = FALSE) # Convert annual energy generation df to sf object, don't remove coordinate columns
+# Spatializing data
+dfy<-st_as_sf(dfy, coords = c("lon", "lat"), crs=4326, remove = FALSE) # Convert annual energy generation df to sf object, don't remove coordinate columns
 dfy<-st_transform(dfy,crs = st_crs(3857)) # Reprojecting all layers to EPSG:3857 WGS/Pseudo Mercator - seems consistent with TNC marine mapper
 cst<-st_read("./Data/global_polygon.gpkg")
 cst<-st_transform(cst,crs = st_crs(3857))
@@ -147,31 +143,56 @@ dfy<-dfy %>%
 eeza10kmbuff<-st_buffer(eeza,dist = 10000)
 csteeza10kmbuff<-st_intersection(cst,eeza10kmbuff) # Creating a limited nearshore polygon to search over for nearest landing point for wind points
 
-xy<-st_as_sf(xy, coords = c("lon", "lat"), crs=st_crs(dfb), remove = FALSE) # Unique wind data points 
+# Figures for power generation and wind speed
+dfy %>% st_drop_geometry(.) %>% distinct(lon,lat) %>% nrow(.) # distinct combinations of lat/lon 
+dfy$index<-interaction(dfy$lon,dfy$lat, drop = TRUE)
+
+ggplot(dfy %>% filter(index %in% sample(levels(dfy$index), size = 12)), aes(x = year, y=kWh, group=index)) + # filter draws a random sample of factors to plot 
+  geom_line(aes(color=index), size=1) +
+  #geom_point(aes(color=index), size=1) +
+  #scale_color_gradient() + 
+  theme_classic() +
+  labs(y = "kWh", x = "Year")
+
+ggplot(dfy %>% filter(index %in% sample(levels(dfy$index), size = 12)), aes(x = year, y=ws, group=index)) + 
+  geom_line(aes(color=index), size=1) +
+  #geom_point(aes(color=index), size=1) +
+  #scale_color_gradient() + 
+  theme_classic() +
+  labs(y = "m/s", x = "Year")
+
+# Costs
+xy<-as.matrix(expand.grid(x,y)) # Unique wind data points 
+xy<-as.data.frame(xy)
+names(xy)<-c("lon","lat")
+xy<-st_as_sf(xy, coords = c("lon", "lat"), crs=4326, remove = FALSE) 
 xy<-st_transform(xy,crs = st_crs(3857))
 system.time(xy<-st_join(xy,eeza)) # Keeping only those observations that are within the US Atlantic EEZ
 xy<-xy %>% drop_na()
 xy<-xy %>% 
   select (-c(geoname, mrgid))
 
-system.time(xy$nearest<-st_nearest_feature(xy,csteeza10kmbuff))
-system.time(xy$dist<-as.vector(st_distance(xy, csteeza10kmbuff[xy$nearest,], by_element=TRUE)))
+system.time(xy$nearest<-st_nearest_feature(xy,csteeza10kmbuff)) # Finding nearest feature to observation points
+system.time(xy$dist<-as.vector(st_distance(xy, csteeza10kmbuff[xy$nearest,], by_element=TRUE))) # Distance to nearest feature
 #csteeza10kmbuff<-csteeza10kmbuff[1,] # Only mainland connection points
 
-dfy2<-dfy %>% 
+dfy<-dfy %>% 
   left_join(.,st_drop_geometry(xy), by = c("lon","lat")) # Merge using unique wind data points is much quicker than finding distance of nearest for all points for all years
 
 #system.time(dfy$nearest<-st_nearest_feature(dfy,csteeza10kmbuff))
 #system.time(dfy$dist<-as.vector(st_distance(dfy, csteeza10kmbuff[dfy$nearest,], by_element=TRUE)))
 
-# ggplot() + # Quick plot of data points
-#   geom_sf(data = csteeza10kmbuff) +
-#   geom_sf(data = xy)
+dfy$trnsc<-ifelse(dfy$dist>60000,810000*W*TT+1360000*dfy$dist/1000,1090000*W*TT+890000*dfy$dist/1000) # Transmission capital cost, uses different functions less/more than 60km
+
+
+
+
 
   
 # LCOE
 # Revenue
 # NPV
+# Add cut-in and cut-out speeds here and below in the powerbreak function
 
 ## Plotting
 

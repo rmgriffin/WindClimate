@@ -176,16 +176,52 @@ system.time(xy$nearest<-st_nearest_feature(xy,csteeza10kmbuff)) # Finding neares
 system.time(xy$dist<-as.vector(st_distance(xy, csteeza10kmbuff[xy$nearest,], by_element=TRUE))) # Distance to nearest feature
 #csteeza10kmbuff<-csteeza10kmbuff[1,] # Only mainland connection points
 
-dfy<-dfy %>% 
-  left_join(.,st_drop_geometry(xy), by = c("lon","lat")) # Merge using unique wind data points is much quicker than finding distance of nearest for all points for all years
+# dfy<-dfy %>% 
+#   left_join(.,st_drop_geometry(xy), by = c("lon","lat")) # Merge using unique wind data points is much quicker than finding distance of nearest for all points for all years
 
 #system.time(dfy$nearest<-st_nearest_feature(dfy,csteeza10kmbuff))
 #system.time(dfy$dist<-as.vector(st_distance(dfy, csteeza10kmbuff[dfy$nearest,], by_element=TRUE)))
 
-dfy$trnsc<-ifelse(dfy$dist>60000,810000*W*TT+1360000*dfy$dist/1000,1090000*W*TT+890000*dfy$dist/1000) # Transmission capital cost, uses different functions less/more than 60km
+xy$trnsc<-ifelse(xy$dist>60000,810000*W*TT+1360000*xy$dist/1000,1090000*W*TT+890000*xy$dist/1000) # Transmission capital cost, uses different functions less/more than 60km
+
+TS<-6410000 # Wind 3.6MW Turbine Unit Cost 
+TL<-10600000 # Wind 5.0MW Turbine Unit Cost
+IC<-305000 # Wind Infield Cable Cost per km
+MF<-1860000 # Wind Monopile Foundation Unit Cost
+JF<-2060000 # Wind Jacketed Foundation Unit Cost
+TI<-.20 # Wind Installation Cost as a Percentage of CAPEX
+TM<-.08 # Wind Miscellaneous Costs as a Percentage of CAPEX
+TO<-.035 # Wind Operations and Management Costs as a Percentage of CAPEX per Year
+TD<-.133 # Wind Weighted Average Cost of Capital (High Discount Rate (Levitt, 2011))
+D<-.070 # Wind Decomissioning (occurs at time T)
+
+xy$wce<-W*(if (TT==3.6) TS else TL)+W*(if (TT==3.6) MF else JF)+W*.91*IC + xy$trnsc # Farm equipment. Foundations are 3.6MW = Monopile, 5.0MW = Jacketed
+xy$wcapex<-xy$wce/(1-TI-TM) # Total CAPEX with Installation and Misc Costs
+
+## Start here
 
 
-
+### PV of O&M Costs
+# O&M Costs Vector
+WOMC<-WCAPEX*TO
+# O&M Costs Matrix for T years
+WOMCT<-matrix(WOMC,T,n,TRUE)
+## Discount Factors Matrix for T years
+# Discount Rate Draws Matrix
+WDF1<-matrix(TD,T,n,TRUE)
+# Time Indicator Vector for T years
+WDF2<-seq(1,T,1)
+# Creating Discount Factor Matrix [Txn]
+WDF<-1/((1+WDF1)^WDF2)
+# Discounted O&M Values Matrix [Txn]
+WDOM<-WOMCT*WDF
+# Present Value of Discounted O&M for all n Draws
+WPVOM<-colSums(WDOM)
+## Total Present Value of Costs 
+# Decomissioning Cost PV
+WPVD<-D*WCAPEX/((1+TD)^T)
+# Total Wind Cost PV
+WCPV<-WCAPEX+WPVOM+WPVD
 
 
   

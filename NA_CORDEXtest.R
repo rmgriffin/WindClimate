@@ -4,11 +4,12 @@ rm(list=ls())
 ## Initalize renv for library lockfile
 library(renv)
 #renv::init()
+#renv::activate() # Run if starting from cloned repository to load package dependencies
 
 ## Packages
 #Sys.setenv(RENV_PATHS_RTOOLS = "C:/rtools40/") # https://github.com/rstudio/renv/issues/225
 
-PKG <- c("raster","sf","tidyverse","rgdal","ncdf4","RColorBrewer","lattice","googledrive","tmap","chron","furrr","nngeo")
+PKG <- c("collapse","raster","sf","tidyverse","rgdal","ncdf4","RColorBrewer","lattice","googledrive","tmap","chron","furrr","nngeo")
 
 for (p in PKG) {
   if(!require(p,character.only = TRUE)) {  
@@ -16,6 +17,8 @@ for (p in PKG) {
     require(p,character.only = TRUE)}
 }
 rm(p,PKG)
+
+options(collapse_mask = "manip") # https://twitter.com/grant_mcdermott/status/1493400952878952448?s=20&t=H9w3Azc04_LlJnqqk-56gQ
 
 ## Snapshot of libraries used
 renv::snapshot()
@@ -193,42 +196,24 @@ TI<-.20 # Wind Installation Cost as a Percentage of CAPEX
 TM<-.08 # Wind Miscellaneous Costs as a Percentage of CAPEX
 TO<-.035 # Wind Operations and Management Costs as a Percentage of CAPEX per Year
 TD<-.133 # Wind Weighted Average Cost of Capital (High Discount Rate (Levitt, 2011))
-D<-.070 # Wind Decomissioning (occurs at time T)
+D<-.070 # Wind Decomissioning (occurs at time WDT)
+WDT<-30 # Wind decomissioning year
 
-xy$wce<-W*(if (TT==3.6) TS else TL)+W*(if (TT==3.6) MF else JF)+W*.91*IC + xy$trnsc # Farm equipment. Foundations are 3.6MW = Monopile, 5.0MW = Jacketed
-xy$wcapex<-xy$wce/(1-TI-TM) # Total CAPEX with Installation and Misc Costs
+xy$wce<-W*(if (TT==3.6) TS else TL)+W*(if (TT==3.6) MF else JF)+W*.91*IC + xy$trnsc # Capex of wind farm equipment, including transmission. Foundations are 3.6MW = Monopile, 5.0MW = Jacketed
+xy$wcapex<-xy$wce/(1-TI-TM) # Total capex with installation and misc costs
+
+xy$womc<-xy$wcapex*TO # Annual O&M Costs 
+xy$pv_womc<-(xy$womc/TD)*(1-(1/((1+TD)^WDT))) # Present value of wind O&M costs (assuming O&M is annually constant)
+xy$pv_d<-(D*xy$wcapex)/((1+TD)^WDT)
+xy$pv_costs<-xy$wcapex+xy$pv_womc+xy$pv_d
 
 ## Start here
 
-
-### PV of O&M Costs
-# O&M Costs Vector
-WOMC<-WCAPEX*TO
-# O&M Costs Matrix for T years
-WOMCT<-matrix(WOMC,T,n,TRUE)
-## Discount Factors Matrix for T years
-# Discount Rate Draws Matrix
-WDF1<-matrix(TD,T,n,TRUE)
-# Time Indicator Vector for T years
-WDF2<-seq(1,T,1)
-# Creating Discount Factor Matrix [Txn]
-WDF<-1/((1+WDF1)^WDF2)
-# Discounted O&M Values Matrix [Txn]
-WDOM<-WOMCT*WDF
-# Present Value of Discounted O&M for all n Draws
-WPVOM<-colSums(WDOM)
-## Total Present Value of Costs 
-# Decomissioning Cost PV
-WPVD<-D*WCAPEX/((1+TD)^T)
-# Total Wind Cost PV
-WCPV<-WCAPEX+WPVOM+WPVD
-
-
-  
 # LCOE
 # Revenue
 # NPV
 # Add cut-in and cut-out speeds here and below in the powerbreak function
+# Normalize by area
 
 ## Plotting
 

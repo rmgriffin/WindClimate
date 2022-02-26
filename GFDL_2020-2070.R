@@ -155,23 +155,23 @@ ncs<-list.files("./Data/ncdf/", full.names = TRUE)
 hub<-rep(109, times = length(ncs))
 
 list3<-list(ncs,b,hub) # Prepping lists for pmap
-system.time(wparam<-pmap_dfr(list3,annualwind)) # Resistant to parallel processing due to dataframe size. Takes ~7hrs to run
-
-#write.csv2(wparam,"wparam.csv") # Save to have on hand in case to save time
+system.time(wp<-pmap_dfr(list3,annualwind)) # Weibull parameter estimation. Resistant to parallel processing due to dataframe size. Takes ~7hrs to run
+rm(xyz)
+#write.csv2(wp,"wp.csv") # Save to have on hand in case to save time
 
 # Animation of change in wind speed through time
-wparam<-st_as_sf(wparam, coords = c("lon", "lat"),crs=4269, remove = FALSE) 
-wparam<-st_transform(wparam,st_crs(3857))
+wp<-st_as_sf(wp, coords = c("lon", "lat"),crs=4269, remove = FALSE) 
+wp<-st_transform(wp,st_crs(3857))
 
 getPalette<-colorRampPalette(brewer.pal(9, "Blues")) # Function, change if different palette from Colorbrewer is desired
 cols<-getPalette(11) 
 scales::show_col(cols)
 
-wparam$mean_ws_yr_f<-cut(wparam$mean_ws_yr,
+wp$mean_ws_yr_f<-cut(wp$mean_ws_yr,
                           breaks = c(seq(2,12,1))) # Manually specifying breaks for symbology
 
 windtime<-ggplot() +
-  geom_sf(data=wparam, aes(color=mean_ws_yr_f, group=year), size=2) + # Don't use geom_point for sf data! Group here is key to just have changes appear in place, versus moving around # [wparam$year<=2022,]
+  geom_sf(data=wp, aes(color=mean_ws_yr_f, group=year), size=2) + # Don't use geom_point for sf data! Group here is key to just have changes appear in place, versus moving around # [wp$year<=2022,]
   scale_color_manual(values = cols, labels = c("2-3","3-4","4-5","5-6","6-7","7-8","8-9","9-10","10-11","11-12"), name = "Mean Annual \nWind Speed (m/s) \n{closest_state}", drop = FALSE) +
   geom_sf(data = eeza, fill = "transparent", color = "black", inherit.aes = FALSE) +
   ggthemes::theme_map() +
@@ -181,48 +181,84 @@ windtime<-ggplot() +
 
 animate(windtime, nframes = 112, end_pause = 10, height=900, width=1200, renderer = gifski_renderer("./windtime_2020_2070.gif"))
 
-wrange<-wparam %>% 
+# Other wind speed plots
+wstats<-wp %>% 
   group_by(llindex) %>% 
   summarise(mean = mean(mean_ws_yr), sd = sd(mean_ws_yr))
 
-wrange_plot<-ggplot(data=wparam, aes(x = mean_ws_yr, y = year2)) +
+wstats_plot<-ggplot(data=wp, aes(x = mean_ws_yr, y = year2)) +
   geom_boxplot()
 
-winddisttime<-ggplot(data=wparam, aes(x = mean_ws_yr, y = year2)) +
+winddisttime<-ggplot(data=wp, aes(x = mean_ws_yr, y = year2)) +
   geom_density_ridges_gradient(scale = 3, rel_min_height = 0.01)
 
-wrangeyear<-wparam %>% 
+wstatsyear<-wp %>% 
   group_by(year) %>% 
   summarise(mean = mean(mean_ws_yr), sd = sd(mean_ws_yr))
 
-wrangeyear_plot_mean<-ggplot() +
+wstatsyear_plot_mean<-ggplot() +
   geom_line(data=wrangeyear, aes(x = year, y = mean))
 
-wrangeyear_plot_sd<-ggplot() +
+wstatsyear_plot_sd<-ggplot() +
   geom_line(data=wrangeyear, aes(x = year, y = sd))
 
-wrangeyear_plot_mean + wrangeyear_plot_sd # Patchwork
+wstatsyear_plot_mean + wstatsyear_plot_sd # Patchwork
 
-OLS_wind_year<-lm(mean_ws_yr ~ year, data = wparam)
-summary(OLS_wind_year) # Slight evidence of an increase in wind speed through time (sig at 10% level)
-bptest(OLS_wind_year) # Unlikely heteroskedastic through time (insig at 5% level using a Breusch Pagan test)
+# Exploratory regression to look at trends in wind speed through time in the region
+lm_wind_year<-lm(mean_ws_yr ~ year, data = wp) # Linear regression model
+summary(lm_wind_year) # Slight evidence of an increase in wind speed through time (sig at 10% level)
+bptest(lm_wind_year) # Unlikely heteroskedastic through time (insig at 5% level using a Breusch Pagan test)
 
+# Costs
+eeza10kmbuff<-st_buffer(eeza,dist = 10000)
+csteeza10kmbuff<-st_intersection(cst,eeza10kmbuff) # Creating a limited nearshore polygon to search over for nearest landing point for wind points
+
+system.time(xy$nearest<-st_nearest_feature(xy,csteeza10kmbuff)) # Finding nearest feature to observation points. Merge using unique wind data points is much quicker than finding distance of nearest for all points for all years.
+system.time(xy$dist<-as.vector(st_distance(xy, csteeza10kmbuff[xy$nearest,], by_element=TRUE))) # Distance to nearest feature
+#csteeza10kmbuff<-csteeza10kmbuff[1,] # Only mainland connection points
+
+W<-18 # Number of turbines
+TT<-3.6 # Turbine rated power  
+RD<-120 # Rotor diameter
+A<-0.97 # Wind availability (% as fraction)
+EL<-0.98 # Wind energy Losses (% as fraction)
+TS<-6410000 # Wind 3.6MW turbine unit cost 
+TL<-10600000 # Wind 5.0MW turbine unit cost
+IC<-305000 # Wind infield cable cost per km
+MF<-1860000 # Wind monopile foundation unit cost
+JF<-2060000 # Wind jacketed foundation unit cost
+TI<-.20 # Wind installation cost as a percentage of CAPEX
+TM<-.08 # Wind miscellaneous costs as a percentage of CAPEX
+TO<-.035 # Wind operations and management costs as a percentage of CAPEX per year
+TD<-.133 # Wind weighted average cost of capital (high discount rate (Levitt, 2011))
+D<-.070 # Wind decomissioning (occurs at time WDT)
+WDT<-30 # Wind decomissioning year
+
+xy$trnsc<-ifelse(xy$dist>60000,810000*W*TT+1360000*xy$dist/1000,1090000*W*TT+890000*xy$dist/1000) # Transmission capital cost, uses different functions less/more than 60km. Values are hardcoded in 2012 USD from https://invest-userguide.readthedocs.io/en/latest/wind_energy.html
+xy$wce<-W*(if (TT==3.6) TS else TL)+W*(if (TT==3.6) MF else JF)+W*.91*IC + xy$trnsc # Capex of wind farm equipment, including transmission. Foundations are 3.6MW = Monopile, 5.0MW = Jacketed
+xy$wcapex<-xy$wce/(1-TI-TM) # Total capex with installation and misc costs
+
+xy$womc<-xy$wcapex*TO # Annual O&M Costs 
+xy$pv_womc<-(xy$womc/TD)*(1-(1/((1+TD)^WDT))) # Present value of wind O&M costs (assuming O&M is annually constant)
+xy$pv_d<-(D*xy$wcapex)/((1+TD)^WDT)
+xy$pv_costs<-xy$wcapex+xy$pv_womc+xy$pv_d # Total present value of costs
+
+# Energy generation
+
+
+
+# LCOE
 
 
 # # Valuation options
-# 1. Change in (LCOE, NPV) locations through time, assuming constant technology, using USD 2020
-# 2. NPV of all locations starting now, with a rebuild at decommissioning date
-# 3. Change in (LCOE, NPV) locations through time, assuming changing technology, using USD 2020
-# 4. Best locations to build out
-# 
+# 1. Change in (LCOE) locations through time, assuming constant technology, using USD 2020 (normalize by area to capture economies of scale)
+# 2. Net present value calculation of build out, inclusive of externalities?
+# #  Below require information about changing technology and market conditions
+# 3. NPV of all locations starting now, with a rebuild at decommissioning date
+# 4. Change in (LCOE, NPV) locations through time, assuming changing technology, using USD 2020
+# 5. Best locations to build out
+# 6. 
 
-# Steps
-# For each year file:
-# Calculate Weibull parameters for each location
-# Calculate annual mean wind speed
-# Calculate annual wind energy production
-# Row bind to XY dataframe  
-# Return dataframe
 
 
 

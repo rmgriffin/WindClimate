@@ -7,7 +7,7 @@ library(renv)
 ## Packages
 #Sys.setenv(RENV_PATHS_RTOOLS = "C:/rtools40/") # https://github.com/rstudio/renv/issues/225
 
-PKG<-c("raster","sf","tidyverse","rgdal","ncdf4","RColorBrewer","lattice","googledrive","tmap","chron","furrr","nngeo","EnvStats")
+PKG<-c("raster","sf","tidyverse","rgdal","ncdf4","RColorBrewer","lattice","googledrive","tmap","chron","furrr","nngeo","EnvStats","gganimate","transformr","ggridges", "patchwork", "lmtest")
 
 for (p in PKG) {
   if(!require(p,character.only = TRUE)) {  
@@ -55,10 +55,6 @@ eeza<-st_read("./Data/eez_atlantic.gpkg") # US EEZ vector https://www.marineregi
 eeza<-st_transform(eeza,st_crs(3857))
 eeza<-eeza[1:2]
 
-
-# dfb<-brick("./Data/wrfout_d01_2007.nc", crs = 4326)
-# dfb<-projectRaster(dfb, crs = 3857)
-
 # Preparing data frames to append data to 
 df<-nc_open("./Data/ncdf/wrfout_d01_2020.nc") # Uses a random layer, could be any year
 #print(df)
@@ -93,14 +89,15 @@ rm(x2,y2)
 names(xy)<-c("lon","lat")
 xy<-st_as_sf(xy, coords = c("lon", "lat"),crs=4269, remove = FALSE) 
 xy<-st_transform(xy,st_crs(3857)) # Grid of all point observations from the modeling
-system.time(xy<-st_join(xy,eeza)) # Keeping only those observations that are within the US Atlantic EEZ
-xy<-xy %>% drop_na()
-xy<-xy %>% 
-  select (-c(geoname, mrgid))
 
 expand.grid.df<-function(...) Reduce(function(...) merge(..., by=NULL), list(...)) # https://stackoverflow.com/questions/11693599/alternative-to-expand-grid-for-data-frames
 system.time(xyz<-expand.grid.df(xy,z,seq(1,365,1))) # Creating a long format dataframe that is # of grid points * # of hub heights * # of days
 names(xyz)<-c("lon","lat","hub","day","geometry")
+
+system.time(xy<-st_join(xy,eeza)) # Keeping only those observations that are within the US Atlantic EEZ
+xy<-xy %>% drop_na()
+xy<-xy %>% 
+  select (-c(geoname, mrgid))
 
 # ggplot() + # Plot of observation locations within domain
 #   geom_sf(data = cst) +
@@ -115,9 +112,7 @@ annualwind<-function(param1,param2,param3){
 
   # Getting wind speed data
   wsu<-as.vector(ncvar_get(df,"u"))
-  head(wsu)
   wsv<-as.vector(ncvar_get(df,"v"))
-  head(wsv)
 
   # Creating a dataframe from whole array
   ws<-sqrt(wsu^2+wsv^2)
@@ -160,7 +155,66 @@ ncs<-list.files("./Data/ncdf/", full.names = TRUE)
 hub<-rep(109, times = length(ncs))
 
 list3<-list(ncs,b,hub) # Prepping lists for pmap
-system.time(test<-pmap_dfr(list3temp,annualwind)) # Resistant to parallel processing due to dataframe size. Takes ~7hrs to run
+system.time(wparam<-pmap_dfr(list3,annualwind)) # Resistant to parallel processing due to dataframe size. Takes ~7hrs to run
+
+#write.csv2(wparam,"wparam.csv") # Save to have on hand in case to save time
+
+# Animation of change in wind speed through time
+wparam<-st_as_sf(wparam, coords = c("lon", "lat"),crs=4269, remove = FALSE) 
+wparam<-st_transform(wparam,st_crs(3857))
+
+getPalette<-colorRampPalette(brewer.pal(9, "Blues")) # Function, change if different palette from Colorbrewer is desired
+cols<-getPalette(11) 
+scales::show_col(cols)
+
+wparam$mean_ws_yr_f<-cut(wparam$mean_ws_yr,
+                          breaks = c(seq(2,12,1))) # Manually specifying breaks for symbology
+
+windtime<-ggplot() +
+  geom_sf(data=wparam, aes(color=mean_ws_yr_f, group=year), size=2) + # Don't use geom_point for sf data! Group here is key to just have changes appear in place, versus moving around # [wparam$year<=2022,]
+  scale_color_manual(values = cols, labels = c("2-3","3-4","4-5","5-6","6-7","7-8","8-9","9-10","10-11","11-12"), name = "Mean Annual \nWind Speed (m/s) \n{closest_state}", drop = FALSE) +
+  geom_sf(data = eeza, fill = "transparent", color = "black", inherit.aes = FALSE) +
+  ggthemes::theme_map() +
+  theme(legend.position = c(0.9,0.3), legend.key.size = unit(.5, 'cm'), text=element_text(size=16), panel.border = element_blank(), plot.margin = unit(c(0, 0, 0, 0), "null")) + #legend.position = c(0.9,0.5)
+  transition_states(year)
+  #labs(title = "Year: {closest_state}")
+
+animate(windtime, nframes = 112, end_pause = 10, height=900, width=1200, renderer = gifski_renderer("./windtime_2020_2070.gif"))
+
+wrange<-wparam %>% 
+  group_by(llindex) %>% 
+  summarise(mean = mean(mean_ws_yr), sd = sd(mean_ws_yr))
+
+wrange_plot<-ggplot(data=wparam, aes(x = mean_ws_yr, y = year2)) +
+  geom_boxplot()
+
+winddisttime<-ggplot(data=wparam, aes(x = mean_ws_yr, y = year2)) +
+  geom_density_ridges_gradient(scale = 3, rel_min_height = 0.01)
+
+wrangeyear<-wparam %>% 
+  group_by(year) %>% 
+  summarise(mean = mean(mean_ws_yr), sd = sd(mean_ws_yr))
+
+wrangeyear_plot_mean<-ggplot() +
+  geom_line(data=wrangeyear, aes(x = year, y = mean))
+
+wrangeyear_plot_sd<-ggplot() +
+  geom_line(data=wrangeyear, aes(x = year, y = sd))
+
+wrangeyear_plot_mean + wrangeyear_plot_sd # Patchwork
+
+OLS_wind_year<-lm(mean_ws_yr ~ year, data = wparam)
+summary(OLS_wind_year) # Slight evidence of an increase in wind speed through time (sig at 10% level)
+bptest(OLS_wind_year) # Unlikely heteroskedastic through time (insig at 5% level using a Breusch Pagan test)
+
+
+
+# # Valuation options
+# 1. Change in (LCOE, NPV) locations through time, assuming constant technology, using USD 2020
+# 2. NPV of all locations starting now, with a rebuild at decommissioning date
+# 3. Change in (LCOE, NPV) locations through time, assuming changing technology, using USD 2020
+# 4. Best locations to build out
+# 
 
 # Steps
 # For each year file:

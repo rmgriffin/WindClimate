@@ -179,7 +179,7 @@ windtime<-ggplot() +
   transition_states(year)
   #labs(title = "Year: {closest_state}")
 
-animate(windtime, nframes = 112, end_pause = 10, height=900, width=1200, renderer = gifski_renderer("./windtime_2020_2070.gif"))
+animate(windtime, nframes = 112, end_pause = 10, height=900, width=1200, renderer = gifski_renderer("./windtime_2020_2070.gif")) # Had to fiddle with nframes to make sure all years were displayed
 
 # Other wind speed plots
 wstats<-wp %>% 
@@ -221,7 +221,7 @@ W<-18 # Number of turbines
 TT<-3.6 # Turbine rated power  
 RD<-120 # Rotor diameter
 A<-0.97 # Wind availability (% as fraction)
-EL<-0.98 # Wind energy Losses (% as fraction)
+EL<-0.98 # Wind energy losses (% as fraction)
 TS<-6410000 # Wind 3.6MW turbine unit cost 
 TL<-10600000 # Wind 5.0MW turbine unit cost
 IC<-305000 # Wind infield cable cost per km
@@ -233,6 +233,10 @@ TO<-.035 # Wind operations and management costs as a percentage of CAPEX per yea
 TD<-.133 # Wind weighted average cost of capital (high discount rate (Levitt, 2011))
 D<-.070 # Wind decomissioning (occurs at time WDT)
 WDT<-30 # Wind decomissioning year
+AD<-1.225 # Air density in kg/m3 at sea level
+WI<-4 # Cut-in wind speed
+WR<-12.5 # Rated wind speed
+WO<-25 # Cut-out wind speed
 
 xy$trnsc<-ifelse(xy$dist>60000,810000*W*TT+1360000*xy$dist/1000,1090000*W*TT+890000*xy$dist/1000) # Transmission capital cost, uses different functions less/more than 60km. Values are hardcoded in 2012 USD from https://invest-userguide.readthedocs.io/en/latest/wind_energy.html
 xy$wce<-W*(if (TT==3.6) TS else TL)+W*(if (TT==3.6) MF else JF)+W*.91*IC + xy$trnsc # Capex of wind farm equipment, including transmission. Foundations are 3.6MW = Monopile, 5.0MW = Jacketed
@@ -244,6 +248,23 @@ xy$pv_d<-(D*xy$wcapex)/((1+TD)^WDT)
 xy$pv_costs<-xy$wcapex+xy$pv_womc+xy$pv_d # Total present value of costs
 
 # Energy generation
+#weib<-function(x) {(wp$shape/wp$scale)*((x/wp$scale)^(wp$shape-1))*(exp(-1*((x/wp$scale)^wp$shape)))} # Weibull distribution
+weib<-function(x, shape, scale) {(shape/scale)*((x/scale)^(shape-1))*(exp(-1*((x/scale)^shape)))} # Weibull distribution
+weib2<-function(x, shape, scale, cut_in, wrated) {((x-cut_in)/(wrated-cut_in))*(shape/scale)*((x/scale)^(shape-1))*(exp(-1*((x/scale)^shape)))} # Weibull distribution with polynomial 
+
+result<-vector("list",nrow(wp)) # https://stackoverflow.com/questions/50705751/writing-a-loop-and-the-integrate-function
+for (i in 1:(nrow(wp))){
+  result[[i]] <- integrate(weib, shape = wp$shape[i], scale = wp$scale[1], lower = WR, upper = WO)$value
+}
+result<-as.vector(unlist(result))
+
+result2<-vector("list", nrow(wp)) # https://stackoverflow.com/questions/50705751/writing-a-loop-and-the-integrate-function
+for (i in 1:(nrow(wp))){
+  result2[[i]] <- integrate(weib2, shape = wp$shape[i], scale = wp$scale[1], lower = WI, upper = WR, cut_in = WI, wrated = WR)$value
+}
+result2<-as.vector(unlist(result2))
+
+test<-(365*((AD-(1.194*10^(-4))*hub[1])/AD)*TT*(result+result2)*EL)*1000*W # Total kWh of farm per year ###### Validate!
 
 
 

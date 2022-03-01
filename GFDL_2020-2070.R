@@ -36,7 +36,7 @@ system.time(map(files$id,dl))
 setwd("..")
 rm(files, folder, folder_url, dl)
 
-# Download files
+# Download netcdf files
 a<-paste0("ftp://anonymous:anonymous@ftp2.psl.noaa.gov/pub/Public/dswales/wrfout_d01_",seq(2020,2070,1),".nc") # List of files on server. Only downloading files for 2020 - 2070, runs from 2007 - 2080
 b<-seq(2020,2070,1) # years to download (ranges from 2007 - 2080)
 c<-paste0("./Data/ncdf/wrfout_d01_",b,".nc") # List of names to save locally as
@@ -48,7 +48,7 @@ dl<-function(param1,param2){
 plan(multisession(workers = nbrOfFreeWorkers())) # Parallel downloading
 system.time(future_map2(a,c,dl)) # In RStudio, this may hang even though all files are downloaded
 
-# Reading in non-wind data
+# Reading in non-netcdf data
 cst<-st_read("./Data/global_polygon.gpkg")
 cst<-st_transform(cst,crs = st_crs(3857))
 eeza<-st_read("./Data/eez_atlantic.gpkg") # US EEZ vector https://www.marineregions.org/gazetteer.php?p=details&id=8456
@@ -105,7 +105,7 @@ xy<-xy %>%
 
 # Function that measures shape and scale parameters of a Weibull distribution, and mean wind speeds, for a specified set of netcdfs, and aggregates values into a dataframe
 annualwind<-function(param1,param2,param3){ 
-  # param1: downloaded netcdfs file location list 
+  # param1: netcdf file location
   # param2: vector of corresponding years represented in downloaded netcdfs, equal in length to param1
   # param3: desired hub height vector for netcdfs (options are 109, 135, 161, 187, 213, 239 meters), equal in length to param1
   df<-nc_open(param1)
@@ -120,7 +120,10 @@ annualwind<-function(param1,param2,param3){
   #max(ws)
   #length(ws[ws > 32.7])/length(ws) # Ratio of observations greater than hurricane speed
   wsday<-colMeans(matrix(ws, nrow=8)) # A vector of daily mean wind speeds, summarized from a vector of 3 hr wind speeds
-
+  yrdays<-ncvar_get(param1,"day")
+  yrdays<-colMeans(matrix(yrdays, nrow=8))
+  yrdays<-length(yrdays) # Number of days per year
+  
   xyz2<-xyz
   xyz2$wsday<-wsday
   system.time(xyz2<-xyz2 %>% 
@@ -136,6 +139,7 @@ annualwind<-function(param1,param2,param3){
   llilevels<-levels(xyz2$llindex) # List of index identifiers
 
   multiweibull<-function(param4){
+    # param4: index that identifies unique groups to estimate weibull parameters for
     xyz2<-xyz2 %>% filter(llindex == param4) # Subset for each point
     ll<-xyz2[1,1:2] %>% st_drop_geometry() # Grabbing lat lon
     mwresult<-eweibull(xyz2$wsday) # Estimate weibull parameters
@@ -144,6 +148,7 @@ annualwind<-function(param1,param2,param3){
     names(mws)<-"mean_ws_yr"
     mwss<-cbind(ll,mwss,mws) # Attaching lat lon to Weibull parameters
     mwss$year<-param2
+    mwss$days<-yrdays
     return(mwss) # Return parameters
   }
 
@@ -155,9 +160,10 @@ ncs<-list.files("./Data/ncdf/", full.names = TRUE)
 hub<-rep(109, times = length(ncs))
 
 list3<-list(ncs,b,hub) # Prepping lists for pmap
-system.time(wp<-pmap_dfr(list3,annualwind)) # Weibull parameter estimation. Resistant to parallel processing due to dataframe size. Takes ~7hrs to run
+system.time(wp<-pmap_dfr(list3,annualwind)) # Weibull parameter estimation for all netcdf files. Resistant to parallel processing due to dataframe size. Takes ~7hrs to run
 rm(xyz)
 #write.csv2(wp,"wp.csv") # Save to have on hand in case to save time
+#wp<-read.csv2("wp.csv")
 
 # Animation of change in wind speed through time
 wp<-st_as_sf(wp, coords = c("lon", "lat"),crs=4269, remove = FALSE) 
@@ -245,27 +251,51 @@ xy$wcapex<-xy$wce/(1-TI-TM) # Total capex with installation and misc costs
 xy$womc<-xy$wcapex*TO # Annual O&M Costs 
 xy$pv_womc<-(xy$womc/TD)*(1-(1/((1+TD)^WDT))) # Present value of wind O&M costs (assuming O&M is annually constant)
 xy$pv_d<-(D*xy$wcapex)/((1+TD)^WDT)
-xy$pv_costs<-xy$wcapex+xy$pv_womc+xy$pv_d # Total present value of costs
+xy$pv_costs<-xy$wcapex+xy$pv_womc+xy$pv_d # Total present value of costs for a wind farm built at this time (not adjusted for future inflation)
 
 # Energy generation
-#weib<-function(x) {(wp$shape/wp$scale)*((x/wp$scale)^(wp$shape-1))*(exp(-1*((x/wp$scale)^wp$shape)))} # Weibull distribution
 weib<-function(x, shape, scale) {(shape/scale)*((x/scale)^(shape-1))*(exp(-1*((x/scale)^shape)))} # Weibull distribution
+# integrate(weib, shape = 2, scale = 6, lower = 0, upper = Inf) # Test function is coded and working correctly, should equal 1
 weib2<-function(x, shape, scale, cut_in, wrated) {((x-cut_in)/(wrated-cut_in))*(shape/scale)*((x/scale)^(shape-1))*(exp(-1*((x/scale)^shape)))} # Weibull distribution with polynomial 
 
 result<-vector("list",nrow(wp)) # https://stackoverflow.com/questions/50705751/writing-a-loop-and-the-integrate-function
 for (i in 1:(nrow(wp))){
-  result[[i]] <- integrate(weib, shape = wp$shape[i], scale = wp$scale[1], lower = WR, upper = WO)$value
+  result[[i]] <- integrate(weib, shape = wp$shape[i], scale = wp$scale[1], lower = WR, upper = WO)$value # $value saves only the estimated value from the integral
 }
 result<-as.vector(unlist(result))
 
-result2<-vector("list", nrow(wp)) # https://stackoverflow.com/questions/50705751/writing-a-loop-and-the-integrate-function
+result2<-vector("list", nrow(wp))
 for (i in 1:(nrow(wp))){
   result2[[i]] <- integrate(weib2, shape = wp$shape[i], scale = wp$scale[1], lower = WI, upper = WR, cut_in = WI, wrated = WR)$value
 }
 result2<-as.vector(unlist(result2))
 
-test<-(365*((AD-(1.194*10^(-4))*hub[1])/AD)*TT*(result+result2)*EL)*1000*W # Total kWh of farm per year ###### Validate!
+wp$result<-result
+wp$result2<-result2
+wp$kWh<-wp$days*((AD-(1.194*10^(-4))*hub[1])/AD)*TT*(wp$result+wp$result2)*EL*1000*W # Total kWh of farm per year ###### Validate, looks off
+wp$llindex<-interaction(wp$lon,wp$lat,drop = TRUE) # Unique index value for each point
+test<-wp %>%
+  # mutate(yearD=year+WDT) %>% 
+  # filter(year>=year&year<yearD) %>%   
+  group_by(lon,lat,year) %>% 
+  summarise(kWhD=sum(kWh))
 
+windowsum<-function(param1,param2){
+  # param1: year
+  # param2: index
+  
+  wp2<-wp[wp$llindex==param2&wp$year>=param1&wp$year<param1+WDT,]
+
+  tdf<-wp2[1,] %>% select(lon,lat)
+  tdf$kWhD<-sum(wp2$kWh)
+  tdf$year<-param1
+  return(tdf)
+}
+
+yearslist<-sort(rep(seq(2020,2070,1),length(levels(wp$llindex))))
+llindexlist<-rep(levels(wp$llindex),length(seq(2020,2070,1)))
+
+test<-future_map2_dfr(yearslist,llindexlist,windowsum)
 
 
 # LCOE

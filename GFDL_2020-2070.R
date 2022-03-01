@@ -237,8 +237,8 @@ TI<-.20 # Wind installation cost as a percentage of CAPEX
 TM<-.08 # Wind miscellaneous costs as a percentage of CAPEX
 TO<-.035 # Wind operations and management costs as a percentage of CAPEX per year
 TD<-.133 # Wind weighted average cost of capital (high discount rate (Levitt, 2011))
-D<-.070 # Wind decomissioning (occurs at time WDT)
-WDT<-30 # Wind decomissioning year
+D<-.070 # Wind decommissioning (occurs at time WDT)
+WDT<-30 # Wind decommissioning year
 AD<-1.225 # Air density in kg/m3 at sea level
 WI<-4 # Cut-in wind speed
 WR<-12.5 # Rated wind speed
@@ -250,7 +250,7 @@ xy$wcapex<-xy$wce/(1-TI-TM) # Total capex with installation and misc costs
 
 xy$womc<-xy$wcapex*TO # Annual O&M Costs 
 xy$pv_womc<-(xy$womc/TD)*(1-(1/((1+TD)^WDT))) # Present value of wind O&M costs (assuming O&M is annually constant)
-xy$pv_d<-(D*xy$wcapex)/((1+TD)^WDT)
+xy$pv_d<-(D*xy$wcapex)/((1+TD)^WDT) # Present value of decommissioning cost
 xy$pv_costs<-xy$wcapex+xy$pv_womc+xy$pv_d # Total present value of costs for a wind farm built at this time (not adjusted for future inflation)
 
 # Energy generation
@@ -274,20 +274,18 @@ wp$result<-result
 wp$result2<-result2
 wp$kWh<-wp$days*((AD-(1.194*10^(-4))*hub[1])/AD)*TT*(wp$result+wp$result2)*EL*1000*W # Total kWh of farm per year ###### Validate, looks off
 wp$llindex<-interaction(wp$lon,wp$lat,drop = TRUE) # Unique index value for each point
-test<-wp %>%
-  # mutate(yearD=year+WDT) %>% 
-  # filter(year>=year&year<yearD) %>%   
-  group_by(lon,lat,year) %>% 
-  summarise(kWhD=sum(kWh))
 
-windowsum<-function(param1,param2){
+windowsum<-function(param1,param2){ # Function to calculate lifetime energy production for a wind farm started in year "param1" for site "param2." Returns total kWh, discounted kWh for LCOE, lat/lon, and year
   # param1: year
   # param2: index
   
-  wp2<-wp[wp$llindex==param2&wp$year>=param1&wp$year<param1+WDT,]
-
-  tdf<-wp2[1,] %>% select(lon,lat)
-  tdf$kWhD<-sum(wp2$kWh)
+  wp2<-wp[wp$llindex==param2&wp$year>=param1&wp$year<param1+WDT,] # Extracting relevant years and location from dataframe
+  #wp2<-wp[wp$llindex=="-82.2669067382812.23.8599700927734"&wp$year>=2020&wp$year<2020+WDT,]
+  
+  tdf<-wp2[1,] %>% select(lon,lat) # Extracting lat lon
+  tdf$kWhD<-sum(wp2$kWh) # Sum of total energy generation
+  wp2$df<-(1/((1+TD)^(wp2$year-param1))) # Discount factor through time
+  tdf$kWhDLCOE<-sum(wp2$kWh*wp2$df) # Denominator of LCOE equation
   tdf$year<-param1
   return(tdf)
 }
@@ -295,10 +293,13 @@ windowsum<-function(param1,param2){
 yearslist<-sort(rep(seq(2020,2070,1),length(levels(wp$llindex))))
 llindexlist<-rep(levels(wp$llindex),length(seq(2020,2070,1)))
 
-test<-future_map2_dfr(yearslist,llindexlist,windowsum)
-
+system.time(kWhD<-future_map2_dfr(yearslist,llindexlist,windowsum))
+wp<-left_join(wp,kWhD,by = c("lon","lat","year"))
+rm(kWhD)
 
 # LCOE
+## Merge XY dataframe
+# Calc LCOE
 
 
 # # Valuation options

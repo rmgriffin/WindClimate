@@ -260,19 +260,20 @@ weib2<-function(x, shape, scale, cut_in, wrated) {((x-cut_in)/(wrated-cut_in))*(
 
 result<-vector("list",nrow(wp)) # https://stackoverflow.com/questions/50705751/writing-a-loop-and-the-integrate-function
 for (i in 1:(nrow(wp))){
-  result[[i]] <- integrate(weib, shape = wp$shape[i], scale = wp$scale[1], lower = WR, upper = WO)$value # $value saves only the estimated value from the integral
+  result[[i]] <- integrate(weib, shape = wp$shape[i], scale = wp$scale[i], lower = WR, upper = WO)$value # $value saves only the estimated value from the integral
 }
 result<-as.vector(unlist(result))
 
 result2<-vector("list", nrow(wp))
 for (i in 1:(nrow(wp))){
-  result2[[i]] <- integrate(weib2, shape = wp$shape[i], scale = wp$scale[1], lower = WI, upper = WR, cut_in = WI, wrated = WR)$value
+  result2[[i]] <- integrate(weib2, shape = wp$shape[i], scale = wp$scale[i], lower = WI, upper = WR, cut_in = WI, wrated = WR)$value
 }
 result2<-as.vector(unlist(result2))
 
 wp$result<-result
 wp$result2<-result2
-wp$kWh<-wp$days*((AD-(1.194*10^(-4))*hub[1])/AD)*TT*(wp$result+wp$result2)*EL*1000*W # Total kWh of farm per year ###### Validate, looks off
+wp$kWh<-wp$days*24*((AD-(1.194*10^(-4))*hub[1])/AD)*TT*(wp$result+wp$result2)*EL*1000*W # Total kWh of farm per year 
+#wp$kWh2<-wp$days*24*(TT*1000)*(.087*wp$mean_ws_yr-((TT*1000)/RD^2))*A*EL*W # Validation of above calculation, using alternate method
 wp$llindex<-interaction(wp$lon,wp$lat,drop = TRUE) # Unique index value for each point
 
 windowsum<-function(param1,param2){ # Function to calculate lifetime energy production for a wind farm started in year "param1" for site "param2." Returns total kWh, discounted kWh for LCOE, lat/lon, and year
@@ -298,8 +299,9 @@ wp<-left_join(wp,kWhD,by = c("lon","lat","year"))
 rm(kWhD)
 
 # LCOE
-## Merge XY dataframe
-# Calc LCOE
+#xydf<-xy %>% st_drop_geometry()
+wp<-merge(wp,xy,by = c("lon","lat"))  # Merge costs (left_join doesn't work, presumably because of this https://stackoverflow.com/questions/61170525/simple-left-join-isnt-working-on-numeric-vector-to-join-by)
+wp$LCOE<-wp$pv_costs/wp$kWhDLCOE # Calc LCOE
 
 
 # # Valuation options

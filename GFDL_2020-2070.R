@@ -7,7 +7,7 @@ library(renv)
 ## Packages
 #Sys.setenv(RENV_PATHS_RTOOLS = "C:/rtools40/") # https://github.com/rstudio/renv/issues/225
 
-PKG<-c("raster","sf","tidyverse","rgdal","ncdf4","RColorBrewer","lattice","googledrive","tmap","chron","furrr","nngeo","EnvStats","gganimate","transformr","ggridges", "patchwork", "lmtest")
+PKG<-c("raster","sf","tidyverse","rgdal","ncdf4","RColorBrewer","lattice","googledrive","tmap","chron","furrr","nngeo","EnvStats","gganimate","transformr","ggridges", "patchwork", "lmtest", "reshape2")
 
 for (p in PKG) {
   if(!require(p,character.only = TRUE)) {  
@@ -37,16 +37,16 @@ setwd("..")
 rm(files, folder, folder_url, dl)
 
 # Download netcdf files
-a<-paste0("ftp://anonymous:anonymous@ftp2.psl.noaa.gov/pub/Public/dswales/wrfout_d01_",seq(2020,2070,1),".nc") # List of files on server. Only downloading files for 2020 - 2070, runs from 2007 - 2080
-b<-seq(2020,2070,1) # years to download (ranges from 2007 - 2080)
+a<-paste0("ftp://anonymous:anonymous@ftp2.psl.noaa.gov/pub/Public/dswales/wrfout_d01_",seq(2020,2099,1),".nc") # List of files on server. Only downloading files for 2020 - 2070, runs from 2007 - 2080
+b<-seq(2020,2099,1) # years to download (ranges from 2007 - 2080)
 c<-paste0("./Data/ncdf/wrfout_d01_",b,".nc") # List of names to save locally as
 
-dl<-function(param1,param2){
+dl2<-function(param1,param2){
   options(timeout=100000) # Keeps download.file from returning a timeout for long-downloading files
   download.file(url = param1, destfile = param2)}
 
-plan(multisession(workers = nbrOfFreeWorkers())) # Parallel downloading
-system.time(future_map2(a,c,dl)) # In RStudio, this may hang even though all files are downloaded
+plan(multisession, workers = availableCores()) # Parallel downloading
+#system.time(future_map2(a,c,dl2)) # In RStudio, this may hang even though all files are downloaded
 
 # Reading in non-netcdf data
 cst<-st_read("./Data/global_polygon.gpkg")
@@ -57,13 +57,35 @@ eeza<-eeza[1:2]
 
 # Preparing data frames to append data to 
 df<-nc_open("./Data/ncdf/wrfout_d01_2020.nc") # Uses a random layer, could be any year
-#print(df)
+#dfu<-brick("./Data/ncdf/wrfout_d01_2020.nc", varname = "u", level = 1) # Don't want to use raster as I have irregularly spaced points
+
+dfu<-ncvar_get(df, "u", start=c(1,1,1,2917))
+system.time(dfu<-melt(dfu))
 
 y<-ncvar_get(df,"lat")
+y<-as.data.frame(y)
+x<-ncvar_get(df,"lon")
+x<-as.data.frame(x)
+
+y2<-melt(y)
+y2$variable<-gsub("[a-zA-Z ]", "", y2$variable) # Remove prefix
+y2$Var1<-rep(seq(1,203,1),194)
+y2<-rename(y2,"Var2"="variable","y"="value")
+y2$Var2<-as.numeric(y2$Var2)
+
+x2<-melt(x)
+x2$variable<-gsub("[a-zA-Z ]", "", x2$variable) # Remove prefix
+x2$Var1<-rep(seq(1,203,1),194)
+x2<-rename(x2,"Var2"="variable","x"="value")
+x2$Var2<-as.numeric(x2$Var2)
+
+dfu<-left_join(dfu,y2)
+dfu<-left_join(dfu,x2)
+
 ny<-dim(y)
 head(y)
 
-x<-ncvar_get(df,"lon")
+
 nx<-dim(x)
 head(x)
 
@@ -87,8 +109,8 @@ y2<-as.matrix(expand.grid(y))
 xy<-as.data.frame(cbind(x2,y2))
 rm(x2,y2)
 names(xy)<-c("lon","lat")
-xy<-st_as_sf(xy, coords = c("lon", "lat"),crs=4269, remove = FALSE) 
-xy<-st_transform(xy,st_crs(3857)) # Grid of all point observations from the modeling
+# xy<-st_as_sf(xy, coords = c("lon", "lat"),crs=4269, remove = FALSE) 
+# xy<-st_transform(xy,st_crs(3857)) # Grid of all point observations from the modeling
 
 expand.grid.df<-function(...) Reduce(function(...) merge(..., by=NULL), list(...)) # https://stackoverflow.com/questions/11693599/alternative-to-expand-grid-for-data-frames
 system.time(xyz<-expand.grid.df(xy,z,seq(1,365,1))) # Creating a long format dataframe that is # of grid points * # of hub heights * # of days
@@ -120,7 +142,7 @@ annualwind<-function(param1,param2,param3){
   #max(ws)
   #length(ws[ws > 32.7])/length(ws) # Ratio of observations greater than hurricane speed
   wsday<-colMeans(matrix(ws, nrow=8)) # A vector of daily mean wind speeds, summarized from a vector of 3 hr wind speeds
-  yrdays<-ncvar_get(param1,"day")
+  yrdays<-ncvar_get(df,"day")
   yrdays<-colMeans(matrix(yrdays, nrow=8))
   yrdays<-length(yrdays) # Number of days per year
   
@@ -148,7 +170,7 @@ annualwind<-function(param1,param2,param3){
     names(mws)<-"mean_ws_yr"
     mwss<-cbind(ll,mwss,mws) # Attaching lat lon to Weibull parameters
     mwss$year<-param2
-    mwss$days<-yrdays
+    mwss$days<-yrdays # Accounting for leap years (this data doesn't appear to include them though)
     return(mwss) # Return parameters
   }
 
@@ -159,8 +181,8 @@ annualwind<-function(param1,param2,param3){
 ncs<-list.files("./Data/ncdf/", full.names = TRUE)
 hub<-rep(109, times = length(ncs))
 
-list3<-list(ncs,b,hub) # Prepping lists for pmap
-system.time(wp<-pmap_dfr(list3,annualwind)) # Weibull parameter estimation for all netcdf files. Resistant to parallel processing due to dataframe size. Takes ~7hrs to run
+list3<-list(ncs[1],b[1],hub[1]) # Prepping lists for pmap
+system.time(wp<-pmap_dfr(list3,annualwind)) # Weibull parameter estimation for all netcdf files. Resistant to parallel processing due to dataframe size. Takes ~8hrs to run
 rm(xyz)
 #write.csv2(wp,"wp.csv") # Save to have on hand in case to save time
 #wp<-read.csv2("wp.csv")
@@ -169,15 +191,15 @@ rm(xyz)
 wp<-st_as_sf(wp, coords = c("lon", "lat"),crs=4269, remove = FALSE) 
 wp<-st_transform(wp,st_crs(3857))
 
+quantile(wp$mean_ws_yr, probs = seq(0, 1, 1/10))
 getPalette<-colorRampPalette(brewer.pal(9, "Blues")) # Function, change if different palette from Colorbrewer is desired
 cols<-getPalette(11) 
 scales::show_col(cols)
 
-wp$mean_ws_yr_f<-cut(wp$mean_ws_yr,
-                          breaks = c(seq(2,12,1))) # Manually specifying breaks for symbology
+wp$mean_ws_yr_f<-cut(wp$mean_ws_yr, breaks = c(seq(2,12,1))) # Manually specifying breaks for symbology
 
 windtime<-ggplot() +
-  geom_sf(data=wp, aes(color=mean_ws_yr_f, group=year), size=2) + # Don't use geom_point for sf data! Group here is key to just have changes appear in place, versus moving around # [wp$year<=2022,]
+  geom_sf(data=wp[wp$year<=2070,], aes(color=mean_ws_yr_f, group=year, geometry = geometry), size=2) + # Don't use geom_point for sf data! Group here is key to just have changes appear in place, versus moving around # [wp$year<=2022,]
   scale_color_manual(values = cols, labels = c("2-3","3-4","4-5","5-6","6-7","7-8","8-9","9-10","10-11","11-12"), name = "Mean Annual \nWind Speed (m/s) \n{closest_state}", drop = FALSE) +
   geom_sf(data = eeza, fill = "transparent", color = "black", inherit.aes = FALSE) +
   ggthemes::theme_map() +
@@ -188,14 +210,16 @@ windtime<-ggplot() +
 animate(windtime, nframes = 112, end_pause = 10, height=900, width=1200, renderer = gifski_renderer("./windtime_2020_2070.gif")) # Had to fiddle with nframes to make sure all years were displayed
 
 # Other wind speed plots
+wp$llindex<-interaction(wp$lon,wp$lat,drop = TRUE) # Unique index value for each point
+
 wstats<-wp %>% 
   group_by(llindex) %>% 
   summarise(mean = mean(mean_ws_yr), sd = sd(mean_ws_yr))
 
-wstats_plot<-ggplot(data=wp, aes(x = mean_ws_yr, y = year2)) +
+wstats_plot<-ggplot(data=wp, aes(y = mean_ws_yr, x = as.factor(year))) +
   geom_boxplot()
 
-winddisttime<-ggplot(data=wp, aes(x = mean_ws_yr, y = year2)) +
+winddisttime<-ggplot(data=wp[wp$year<=2023,], aes(x = mean_ws_yr, y = as.factor(year))) +
   geom_density_ridges_gradient(scale = 3, rel_min_height = 0.01)
 
 wstatsyear<-wp %>% 
@@ -203,10 +227,10 @@ wstatsyear<-wp %>%
   summarise(mean = mean(mean_ws_yr), sd = sd(mean_ws_yr))
 
 wstatsyear_plot_mean<-ggplot() +
-  geom_line(data=wrangeyear, aes(x = year, y = mean))
+  geom_line(data=wstatsyear, aes(x = year, y = mean))
 
 wstatsyear_plot_sd<-ggplot() +
-  geom_line(data=wrangeyear, aes(x = year, y = sd))
+  geom_line(data=wstatsyear, aes(x = year, y = sd))
 
 wstatsyear_plot_mean + wstatsyear_plot_sd # Patchwork
 
@@ -223,7 +247,7 @@ system.time(xy$nearest<-st_nearest_feature(xy,csteeza10kmbuff)) # Finding neares
 system.time(xy$dist<-as.vector(st_distance(xy, csteeza10kmbuff[xy$nearest,], by_element=TRUE))) # Distance to nearest feature
 #csteeza10kmbuff<-csteeza10kmbuff[1,] # Only mainland connection points
 
-W<-18 # Number of turbines
+W<-80 # Number of turbines
 TT<-3.6 # Turbine rated power  
 RD<-120 # Rotor diameter
 A<-0.97 # Wind availability (% as fraction)
@@ -274,7 +298,6 @@ wp$result<-result
 wp$result2<-result2
 wp$kWh<-wp$days*24*((AD-(1.194*10^(-4))*hub[1])/AD)*TT*(wp$result+wp$result2)*EL*1000*W # Total kWh of farm per year 
 #wp$kWh2<-wp$days*24*(TT*1000)*(.087*wp$mean_ws_yr-((TT*1000)/RD^2))*A*EL*W # Validation of above calculation, using alternate method
-wp$llindex<-interaction(wp$lon,wp$lat,drop = TRUE) # Unique index value for each point
 
 windowsum<-function(param1,param2){ # Function to calculate lifetime energy production for a wind farm started in year "param1" for site "param2." Returns total kWh, discounted kWh for LCOE, lat/lon, and year
   # param1: year
@@ -291,17 +314,38 @@ windowsum<-function(param1,param2){ # Function to calculate lifetime energy prod
   return(tdf)
 }
 
-yearslist<-sort(rep(seq(2020,2070,1),length(levels(wp$llindex))))
-llindexlist<-rep(levels(wp$llindex),length(seq(2020,2070,1)))
+yearslist<-sort(rep(seq(b[1],b[length(b)],1),length(levels(wp$llindex))))
+llindexlist<-rep(levels(wp$llindex),length(seq(b[1],b[length(b)],1)))
 
 system.time(kWhD<-future_map2_dfr(yearslist,llindexlist,windowsum))
+kWhD<-kWhD %>% st_drop_geometry()
 wp<-left_join(wp,kWhD,by = c("lon","lat","year"))
 rm(kWhD)
 
 # LCOE
-#xydf<-xy %>% st_drop_geometry()
-wp<-merge(wp,xy,by = c("lon","lat"))  # Merge costs (left_join doesn't work, presumably because of this https://stackoverflow.com/questions/61170525/simple-left-join-isnt-working-on-numeric-vector-to-join-by)
+xydf<-xy %>% st_drop_geometry()
+wp<-merge(wp,xydf,by = c("lon","lat"))  # Merge costs (left_join doesn't work, presumably because of this https://stackoverflow.com/questions/61170525/simple-left-join-isnt-working-on-numeric-vector-to-join-by)
 wp$LCOE<-wp$pv_costs/wp$kWhDLCOE # Calc LCOE
+rm(xydf)
+
+# Animation of LCOE through time
+getPalette<-colorRampPalette(brewer.pal(9, "Blues")) # Function, change if different palette from Colorbrewer is desired
+cols<-getPalette(11) 
+#scales::show_col(cols)
+
+breaks10LCOE<-quantile(wp$LCOE, probs = seq(0, 1, 1/10))
+wp$LCOE_f<-cut(wp$LCOE, breaks = breaks10LCOE) # Manually specifying breaks for symbology
+
+LCOEtime<-ggplot() +
+  geom_sf(data=wp, aes(color=LCOE_f, group=year, geometry = geometry), size=2) + # Don't use geom_point for sf data! Group here is key to just have changes appear in place, versus moving around # [wp$year<=2022,]
+  scale_color_manual(values = cols, labels = levels(wp$LCOE_f), name = "Levelized Cost \nof Energy ($/kWh) \n{closest_state}", drop = FALSE) +
+  geom_sf(data = eeza, fill = "transparent", color = "black", inherit.aes = FALSE) +
+  ggthemes::theme_map() +
+  theme(legend.position = c(0.9,0.3), legend.key.size = unit(.5, 'cm'), text=element_text(size=16), panel.border = element_blank(), plot.margin = unit(c(0, 0, 0, 0), "null")) + #legend.position = c(0.9,0.5)
+  transition_states(year)
+#labs(title = "Year: {closest_state}")
+
+animate(LCOEtime, nframes = 112, end_pause = 10, height=900, width=1200, renderer = gifski_renderer("./lcoetime_2020_2070.gif")) # Had to fiddle with nframes to make sure all years were displayed
 
 
 # # Valuation options

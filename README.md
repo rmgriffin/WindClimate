@@ -1,2 +1,2 @@
-# WindDelay
-Analysis for assessing costs of wind delay
+# WindClimate
+Scripts in support of geospatial modeling of future wind energy generation and value

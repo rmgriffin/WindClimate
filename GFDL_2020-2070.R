@@ -59,8 +59,22 @@ eeza<-eeza[1:2]
 df<-nc_open("./Data/ncdf/wrfout_d01_2020.nc") # Uses a random layer, could be any year
 #dfu<-brick("./Data/ncdf/wrfout_d01_2020.nc", varname = "u", level = 1) # Don't want to use raster as I have irregularly spaced points
 
-dfu<-ncvar_get(df, "u", start=c(1,1,1,2917))
+dfu<-ncvar_get(df, "u", start=c(1,1,1,1))
 system.time(dfu<-melt(dfu))
+system.time(dfu<-dfu %>% 
+              filter(.,Var3==1))
+dfu<-rename(dfu,"u"="value")
+
+dfv<-ncvar_get(df, "v", start=c(1,1,1,1))
+system.time(dfv<-melt(dfv))
+system.time(dfv<-dfv %>% 
+              filter(.,Var3==1))
+dfv<-rename(dfv,"v"="value")
+
+df<-cbind(dfu,dfv$v)
+df<-rename(df,"v"="dfv$v")
+
+rm(dfu,dfv)
 
 y<-ncvar_get(df,"lat")
 y<-as.data.frame(y)
@@ -79,30 +93,36 @@ x2$Var1<-rep(seq(1,203,1),194)
 x2<-rename(x2,"Var2"="variable","x"="value")
 x2$Var2<-as.numeric(x2$Var2)
 
-dfu<-left_join(dfu,y2)
-dfu<-left_join(dfu,x2)
+df<-left_join(df,y2)
+df<-left_join(df,x2)
 
-ny<-dim(y)
-head(y)
+df$ws<-sqrt(df$u^2+df$v^2)
+df<-df %>% 
+  select (Var4,y,x,ws)
+
+# Look at one time slice
+pts<-203*194
+pts2<-2*pts
+df2<-df[1:pts,]
+df2<-st_as_sf(df2, coords = c("x", "y"),crs=4269, remove = FALSE) #4269
+df2<-st_transform(df2,st_crs(3857))
+
+system.time(df2<-df2 %>% 
+              filter(.,ws!=0))
+
+ggplot() +
+  geom_sf(data=df2, aes(color=ws, geometry = geometry), size=2) + 
+  #geom_sf(data = eeza, fill = "transparent", color = "black", inherit.aes = FALSE) +
+  ggthemes::theme_map()
 
 
-nx<-dim(x)
-head(x)
 
-print(c(nx,ny))
 
-year<-ncvar_get(df,"year")
-head(year)
 
-day<-ncvar_get(df,"day")
-head(day)
-days<-colMeans(matrix(day, nrow=8))
 
-hour<-ncvar_get(df,"hour") # One observation every 3 hours
-head(hour)
 
-z<-ncvar_get(df,"level")
-head(z)
+
+
 
 x2<-as.matrix(expand.grid(x))
 y2<-as.matrix(expand.grid(y))

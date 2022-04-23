@@ -56,16 +56,16 @@ eeza<-st_transform(eeza,st_crs(3857))
 eeza<-eeza[1:2]
 
 # Preparing data frames to append data to 
-df<-nc_open("./Data/ncdf/wrfout_d01_2020.nc") # Uses a random layer, could be any year
+nc<-nc_open("./Data/ncdf/wrfout_d01_2081.nc") # Uses a random layer, could be any year
 #dfu<-brick("./Data/ncdf/wrfout_d01_2020.nc", varname = "u", level = 1) # Don't want to use raster as I have irregularly spaced points
 
-dfu<-ncvar_get(df, "u", start=c(1,1,1,1))
+dfu<-ncvar_get(nc, "u", start=c(1,1,1,1))
 system.time(dfu<-melt(dfu))
 system.time(dfu<-dfu %>% 
               filter(.,Var3==1))
 dfu<-rename(dfu,"u"="value")
 
-dfv<-ncvar_get(df, "v", start=c(1,1,1,1))
+dfv<-ncvar_get(nc, "v", start=c(1,1,1,1))
 system.time(dfv<-melt(dfv))
 system.time(dfv<-dfv %>% 
               filter(.,Var3==1))
@@ -76,9 +76,9 @@ df<-rename(df,"v"="dfv$v")
 
 rm(dfu,dfv)
 
-y<-ncvar_get(df,"lat")
+y<-ncvar_get(nc,"lat")
 y<-as.data.frame(y)
-x<-ncvar_get(df,"lon")
+x<-ncvar_get(nc,"lon")
 x<-as.data.frame(x)
 
 y2<-melt(y)
@@ -102,17 +102,17 @@ df<-df %>%
 
 # Look at one time slice
 pts<-203*194
-pts2<-2*pts
 df2<-df[1:pts,]
 df2<-st_as_sf(df2, coords = c("x", "y"),crs=4269, remove = FALSE) #4269
 df2<-st_transform(df2,st_crs(3857))
 
-system.time(df2<-df2 %>% 
-              filter(.,ws!=0))
+system.time(df3<-df2 %>% 
+              filter(.,ws==0))
 
 ggplot() +
   geom_sf(data=df2, aes(color=ws, geometry = geometry), size=2) + 
-  #geom_sf(data = eeza, fill = "transparent", color = "black", inherit.aes = FALSE) +
+  geom_sf(data=df3, aes(geometry = geometry), size=2, color = "red") + 
+  geom_sf(data = cst, fill = "transparent", color = "black", inherit.aes = FALSE) +
   ggthemes::theme_map()
 
 

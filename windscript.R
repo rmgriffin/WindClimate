@@ -7,7 +7,7 @@ library(renv)
 ## Packages
 #Sys.setenv(RENV_PATHS_RTOOLS = "C:/rtools40/") # https://github.com/rstudio/renv/issues/225
 
-PKG<-c("raster","sf","tidyverse","rgdal","ncdf4","RColorBrewer","lattice","googledrive","tmap","chron","furrr","nngeo","EnvStats","gganimate","transformr","ggridges", "patchwork", "lmtest", "reshape2")
+PKG<-c("raster","sf","tidyverse","rgdal","ncdf4","RNetCDF","RColorBrewer","lattice","googledrive","tmap","chron","furrr","nngeo","EnvStats","gganimate","transformr","ggridges", "patchwork", "lmtest", "reshape2")
 
 for (p in PKG) {
   if(!require(p,character.only = TRUE)) {  
@@ -37,16 +37,56 @@ setwd("..")
 rm(files, folder, folder_url, dl)
 
 # Download netcdf files
-a<-paste0("ftp://anonymous:anonymous@ftp2.psl.noaa.gov/pub/Public/dswales/wrfout_d01_",seq(2020,2099,1),".nc") # List of files on server. Only downloading files for 2020 - 2070, runs from 2007 - 2080
-b<-seq(2020,2099,1) # years to download (ranges from 2007 - 2080)
-c<-paste0("./Data/ncdf/wrfout_d01_",b,".nc") # List of names to save locally as
 
-dl2<-function(param1,param2){
-  options(timeout=100000) # Keeps download.file from returning a timeout for long-downloading files
-  download.file(url = param1, destfile = param2)}
+# a<-paste0("ftp://anonymous:anonymous@ftp2.psl.noaa.gov/pub/Public/dswales/wrfout_d01_",seq(2020,2099,1),".nc") # List of files on server. Only downloading files for 2020 - 2070, runs from 2007 - 2080
+# b<-seq(2020,2099,1) # years to download (ranges from 2007 - 2080)
+# c<-paste0("./Data/ncdf/wrfout_d01_",b,".nc") # List of names to save locally as
+# 
+# dl2<-function(param1,param2){
+#   options(timeout=100000) # Keeps download.file from returning a timeout for long-downloading files
+#   download.file(url = param1, destfile = param2)}
+# 
+# plan(multisession, workers = availableCores()) # Parallel downloading
+# #system.time(future_map2(a,c,dl2)) # In RStudio, this may hang even though all files are downloaded
 
-plan(multisession, workers = availableCores()) # Parallel downloading
-#system.time(future_map2(a,c,dl2)) # In RStudio, this may hang even though all files are downloaded
+options(timeout=100000)
+download.file(url = "ftp://anonymous@ftp.cdc.noaa.gov/pub/Public/jscott/RGriffin/wrf.winds.hgt.NEUS.zip", destfile = "./Data/ncdf/wrf.winds.hgt.NEUS.zip")
+
+# Unzip code function -----------------------------------------------------
+decompress_file <- function(file, directory, .file_cache = FALSE) {
+  
+  if (.file_cache == TRUE) {
+    print("decompression skipped")
+  } else {
+    
+    # Set working directory for decompression
+    # simplifies unzip directory location behavior
+    wd <- getwd()
+    setwd(directory)
+    
+    # Run decompression
+    decompression <-
+      system2("unzip",
+              args = c("-o", # include override flag
+                       file),
+              stdout = TRUE)
+    
+    # uncomment to delete archive once decompressed
+    file.remove(file) 
+    
+    # Reset working directory
+    setwd(wd); rm(wd)
+    
+    # Test for success criteria
+    # change the search depending on 
+    # your implementation
+    if (grepl("Warning message", tail(decompression, 1))) {
+      print(decompression)
+    }
+  }
+}
+
+system.time(decompress_file("./Data/ncdf/wrf.winds.hgt.NEUS.zip","./Data/ncdf/"))
 
 # Reading in non-netcdf data
 cst<-st_read("./Data/global_polygon.gpkg")
@@ -55,157 +95,116 @@ eeza<-st_read("./Data/eez_atlantic.gpkg") # US EEZ vector https://www.marineregi
 eeza<-st_transform(eeza,st_crs(3857))
 eeza<-eeza[1:2]
 
-# Preparing data frames to append data to 
-nc<-nc_open("./Data/ncdf/wrfout_d01_2081.nc") # Uses a random layer, could be any year
-#dfu<-brick("./Data/ncdf/wrfout_d01_2020.nc", varname = "u", level = 1) # Don't want to use raster as I have irregularly spaced points
-
-dfu<-ncvar_get(nc, "u", start=c(1,1,1,1))
-system.time(dfu<-melt(dfu))
-system.time(dfu<-dfu %>% 
-              filter(.,Var3==1))
-dfu<-rename(dfu,"u"="value")
-
-dfv<-ncvar_get(nc, "v", start=c(1,1,1,1))
-system.time(dfv<-melt(dfv))
-system.time(dfv<-dfv %>% 
-              filter(.,Var3==1))
-dfv<-rename(dfv,"v"="value")
-
-df<-cbind(dfu,dfv$v)
-df<-rename(df,"v"="dfv$v")
-
-rm(dfu,dfv)
-
-y<-ncvar_get(nc,"lat")
-y<-as.data.frame(y)
-x<-ncvar_get(nc,"lon")
-x<-as.data.frame(x)
-
-y2<-melt(y)
-y2$variable<-gsub("[a-zA-Z ]", "", y2$variable) # Remove prefix
-y2$Var1<-rep(seq(1,203,1),194)
-y2<-rename(y2,"Var2"="variable","y"="value")
-y2$Var2<-as.numeric(y2$Var2)
-
-x2<-melt(x)
-x2$variable<-gsub("[a-zA-Z ]", "", x2$variable) # Remove prefix
-x2$Var1<-rep(seq(1,203,1),194)
-x2<-rename(x2,"Var2"="variable","x"="value")
-x2$Var2<-as.numeric(x2$Var2)
-
-df<-left_join(df,y2)
-df<-left_join(df,x2)
-
-df$ws<-sqrt(df$u^2+df$v^2)
-df<-df %>% 
-  select (Var4,y,x,ws)
-
-# Look at one time slice
-pts<-203*194
-df2<-df[1:pts,]
-df2<-st_as_sf(df2, coords = c("x", "y"),crs=4269, remove = FALSE) #4269
-df2<-st_transform(df2,st_crs(3857))
-
-system.time(df3<-df2 %>% 
-              filter(.,ws==0))
-
-ggplot() +
-  geom_sf(data=df2, aes(color=ws, geometry = geometry), size=2) + 
-  geom_sf(data=df3, aes(geometry = geometry), size=2, color = "red") + 
-  geom_sf(data = cst, fill = "transparent", color = "black", inherit.aes = FALSE) +
-  ggthemes::theme_map()
-
-
-
-
-
-
-
-
-
-
-x2<-as.matrix(expand.grid(x))
-y2<-as.matrix(expand.grid(y))
-xy<-as.data.frame(cbind(x2,y2))
-rm(x2,y2)
-names(xy)<-c("lon","lat")
-# xy<-st_as_sf(xy, coords = c("lon", "lat"),crs=4269, remove = FALSE) 
-# xy<-st_transform(xy,st_crs(3857)) # Grid of all point observations from the modeling
-
-expand.grid.df<-function(...) Reduce(function(...) merge(..., by=NULL), list(...)) # https://stackoverflow.com/questions/11693599/alternative-to-expand-grid-for-data-frames
-system.time(xyz<-expand.grid.df(xy,z,seq(1,365,1))) # Creating a long format dataframe that is # of grid points * # of hub heights * # of days
-names(xyz)<-c("lon","lat","hub","day","geometry")
-
-system.time(xy<-st_join(xy,eeza)) # Keeping only those observations that are within the US Atlantic EEZ
-xy<-xy %>% drop_na()
-xy<-xy %>% 
-  select (-c(geoname, mrgid))
-
-# ggplot() + # Plot of observation locations within domain
-#   geom_sf(data = cst) +
-#   geom_sf(data = xy)
-
-# Function that measures shape and scale parameters of a Weibull distribution, and mean wind speeds, for a specified set of netcdfs, and aggregates values into a dataframe
-annualwind<-function(param1,param2,param3){ 
-  # param1: netcdf file location
-  # param2: vector of corresponding years represented in downloaded netcdfs, equal in length to param1
-  # param3: desired hub height vector for netcdfs (options are 109, 135, 161, 187, 213, 239 meters), equal in length to param1
-  df<-nc_open(param1)
+# Reading in netcdf data and assembling a dataframe of all years that summarizes annual weibull shape and scale parameters
+annualwind<-function(param1){ 
+  # param1: netcdf file locations
   
-  # Getting wind speed data
-  wsu<-as.vector(ncvar_get(df,"u"))
-  wsv<-as.vector(ncvar_get(df,"v"))
+  nc<-nc_open(param1) # Uses a random layer, could be any year
   
-  # Creating a dataframe from whole array
-  ws<-sqrt(wsu^2+wsv^2)
-  #hist(ws, xlim = c(0, 100), breaks = seq(0,max(ws)+2,2))
-  #max(ws)
-  #length(ws[ws > 32.7])/length(ws) # Ratio of observations greater than hurricane speed
-  wsday<-colMeans(matrix(ws, nrow=8)) # A vector of daily mean wind speeds, summarized from a vector of 3 hr wind speeds
-  yrdays<-ncvar_get(df,"day")
-  yrdays<-colMeans(matrix(yrdays, nrow=8))
-  yrdays<-length(yrdays) # Number of days per year
+  df<-ncvar_get(nc, "speed", start=c(1,1,1,1))
+  system.time(df<-melt(df))
+  df<-rename(df,"ws"="value")
   
-  xyz2<-xyz
-  xyz2$wsday<-wsday
-  system.time(xyz2<-xyz2 %>% 
-                filter(.,hub==param3)) # Filtering by chosen hub height
+  y<-ncvar_get(nc,"lat")
+  y<-as.data.frame(y)
+  x<-ncvar_get(nc,"lon")
+  x<-as.data.frame(x)
   
-  system.time(xyz2<-st_join(xyz2,eeza)) # Keeping only those observations that are within the US Atlantic EEZ
-  xyz2<-xyz2 %>% drop_na()
-  xyz2<-xyz2 %>% 
-    select (-c(geoname, mrgid))
+  y2<-melt(y)
+  y2$variable<-gsub("[a-zA-Z ]", "", y2$variable) # Remove prefix
+  y2$Var1<-rep(seq(1,37,1),58)
+  y2<-rename(y2,"Var2"="variable","y"="value")
+  y2$Var2<-as.numeric(y2$Var2)
   
-  xyz2$llindex<-interaction(xyz2$lon,xyz2$lat,drop = TRUE) # Unique index value for each point
+  x2<-melt(x)
+  x2$variable<-gsub("[a-zA-Z ]", "", x2$variable) # Remove prefix
+  x2$Var1<-rep(seq(1,37,1),58)
+  x2<-rename(x2,"Var2"="variable","x"="value")
+  x2$Var2<-as.numeric(x2$Var2)
   
-  llilevels<-levels(xyz2$llindex) # List of index identifiers
+  df<-left_join(df,y2)
+  df<-left_join(df,x2)
   
-  multiweibull<-function(param4){
-    # param4: index that identifies unique groups to estimate weibull parameters for
-    xyz2<-xyz2 %>% filter(llindex == param4) # Subset for each point
-    ll<-xyz2[1,1:2] %>% st_drop_geometry() # Grabbing lat lon
-    mwresult<-eweibull(xyz2$wsday) # Estimate weibull parameters
+  lev<-cbind(as.data.frame(nc$dim$level$vals),seq(1,3,1))
+  colnames(lev)
+  lev<-rename(lev,"Var3"="seq(1, 3, 1)","hubhgt"="nc$dim$level$vals")
+  df<-left_join(df,lev, by = "Var3")
+  
+  tm<-cbind(as.data.frame(utcal.nc("minutes since 1947-07-01 00:00:00", value = nc$dim$time$vals)),seq(1,length(nc$dim$time$vals),1)) # https://stackoverflow.com/questions/66376301/convert-from-minutes-since-origin-to-date-time-for-normal-people-yyyy-mm-dd-hh
+  colnames(tm)[ncol(tm)]
+  tm<-rename(tm,"Var4"=colnames(tm)[ncol(tm)])
+  df<-left_join(df,tm, by = "Var4")
+  
+  df<-df %>% 
+    select (-c(Var1, Var2, Var3, Var4, minute, second))
+  
+  # # Plot to check import
+  # df2<-st_as_sf(df, coords = c("x", "y"),crs=4269, remove = FALSE) #4269
+  # df2<-st_transform(df2,st_crs(3857))
+  # 
+  # getPalette<-colorRampPalette(brewer.pal(9, "RdBu")) # Function, change if different palette from Colorbrewer is desired
+  # cols<-getPalette(50)
+  # cols<-rev(cols) # Reverse list elements
+  # #scales::show_col(cols)
+  # breaks4<-seq(0,15,1)
+  # df2$wsbreak<-cut(df2$ws, breaks=breaks4)
+  # 
+  # ggplot() +
+  #   geom_sf(data=df2[df2$month==2&df2$day==1&df2$hour==3,], aes(color=wsbreak, geometry = geometry), size=2) +
+  #   scale_color_manual(values = cols, labels = levels(df2$wsbreak), name = "Wind Speed (m/s)", drop = FALSE, guide = guide_legend(nrow = 2)) +
+  #   geom_sf(data = eeza, fill = "transparent", color = "black", inherit.aes = FALSE) +
+  #   ggthemes::theme_map() +
+  #   theme(legend.position="bottom", legend.key.size = unit(0, 'cm'), legend.direction = "horizontal") +
+  #   guides(fill = guide_legend(label.position = "bottom", title.hjust = 0.5)) +
+  #   facet_wrap( ~ hubhgt, ncol=3)
+  # 
+  # df_1<-df2 %>% 
+  #   filter(month==1) %>% # Only data from January
+  #   group_by(y,x,hubhgt) %>% 
+  #   summarise(meanws=mean(ws))
+  
+  # Weibull parameters for each lat/long/month/hubhgt combo
+  
+  df$llindex<-interaction(df$x,df$y,df$hubhgt,drop = TRUE)
+  llilevels<-levels(df$llindex) # List of index identifiers
+
+  multiweibull<-function(param2){
+    # param2: index that identifies unique groups to estimate weibull parameters for
+    df2<-df %>% filter(llindex == param2) # Subset for each point
+    ll<-df2[1,2:3] # Grabbing lat lon
+    mwresult<-eweibull(df2$ws) # Estimate weibull parameters
     mwss<-as.data.frame(t(mwresult$parameters))
-    mws<-as.data.frame(mean(xyz2$wsday)) # Mean annual wind speed
-    names(mws)<-"mean_ws_yr"
+    mws<-as.data.frame(mean(df2$ws)) # Mean wind speed
+    names(mws)<-"mean_ws"
     mwss<-cbind(ll,mwss,mws) # Attaching lat lon to Weibull parameters
-    mwss$year<-param2
-    mwss$days<-yrdays # Accounting for leap years (this data doesn't appear to include them though)
+    mwss$year<-df2$year[1]
+    mwss$days<-nrow(df2)/8 # Number of days in month
+    mwss$hubhgt<-df2$hubhgt[1]
     return(mwss) # Return parameters
   }
-  
+
+  plan(multisession, workers = 3)
+  options(future.globals.maxSize= 891289600000)
   system.time(mw<-future_map_dfr(llilevels,multiweibull)) # Data frame of shape and scale parameters for all points
+  
   return(mw)
 }
 
 ncs<-list.files("./Data/ncdf/", full.names = TRUE)
-hub<-rep(109, times = length(ncs))
 
-list3<-list(ncs[1],b[1],hub[1]) # Prepping lists for pmap
-system.time(wp<-pmap_dfr(list3,annualwind)) # Weibull parameter estimation for all netcdf files. Resistant to parallel processing due to dataframe size. Takes ~8hrs to run
-rm(xyz)
+plan(multisession, workers = 3)
+options(future.globals.maxSize= 891289600000)
+system.time(wp<-future_map_dfr(ncs[1:3],annualwind))
+
 #write.csv2(wp,"wp.csv") # Save to have on hand in case to save time
 #wp<-read.csv2("wp.csv")
+
+
+
+
+
+
+
 
 # Animation of change in wind speed through time
 wp<-st_as_sf(wp, coords = c("lon", "lat"),crs=4269, remove = FALSE) 

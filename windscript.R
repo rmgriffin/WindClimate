@@ -95,7 +95,7 @@ eeza<-st_read("./Data/eez_atlantic.gpkg") # US EEZ vector https://www.marineregi
 eeza<-st_transform(eeza,st_crs(3857))
 eeza<-eeza[1:2]
 
-# Reading in netcdf data and assembling a dataframe of all years that summarizes annual weibull shape and scale parameters
+# Reading in netcdf data and assembling a dataframe of relevant years
 annualwind<-function(param1){ 
   # param1: netcdf file locations
   
@@ -130,13 +130,14 @@ annualwind<-function(param1){
   lev<-rename(lev,"Var3"="seq(1, 3, 1)","hubhgt"="nc$dim$level$vals")
   df<-left_join(df,lev, by = "Var3")
   
-  tm<-cbind(as.data.frame(utcal.nc("minutes since 1947-07-01 00:00:00", value = nc$dim$time$vals)),seq(1,length(nc$dim$time$vals),1)) # https://stackoverflow.com/questions/66376301/convert-from-minutes-since-origin-to-date-time-for-normal-people-yyyy-mm-dd-hh
+  tm<-cbind(as.data.frame(utcal.nc(nc$dim$time$units, value = nc$dim$time$vals)),seq(1,length(nc$dim$time$vals),1)) # https://stackoverflow.com/questions/66376301/convert-from-minutes-since-origin-to-date-time-for-normal-people-yyyy-mm-dd-hh
   colnames(tm)[ncol(tm)]
   tm<-rename(tm,"Var4"=colnames(tm)[ncol(tm)])
   df<-left_join(df,tm, by = "Var4")
   
   df<-df %>% 
-    select (-c(Var1, Var2, Var3, Var4, minute, second))
+    select (-c(Var1, Var2, Var3, Var4, minute, second, month, day, hour)) %>% 
+    filter(year==median(year)) # drops carryover days due to leap year from prior year
   
   # # Plot to check import
   # df2<-st_as_sf(df, coords = c("x", "y"),crs=4269, remove = FALSE) #4269
@@ -164,10 +165,11 @@ annualwind<-function(param1){
   #   summarise(meanws=mean(ws))
   
   # Weibull parameters for each lat/long/month/hubhgt combo
-  
-  df$llindex<-interaction(df$x,df$y,df$hubhgt,drop = TRUE)
+  #system.time(df$llindex<-interaction(df$x,df$y,df$hubhgt,df$year,drop = TRUE))
+  #system.time(df$llindex<-as.factor(paste(df$x,df$y,df$hubhgt,df$year))) # Faster than "interaction" to create a grouping variable
+  system.time(df$llindex<-as.factor(df$x*df$y*df$hubhgt)) # Faster than pasting to create a grouping variable (watch out for non-unique though)
   llilevels<-levels(df$llindex) # List of index identifiers
-
+  
   multiweibull<-function(param2){
     # param2: index that identifies unique groups to estimate weibull parameters for
     df2<-df %>% filter(llindex == param2) # Subset for each point
@@ -178,11 +180,12 @@ annualwind<-function(param1){
     names(mws)<-"mean_ws"
     mwss<-cbind(ll,mwss,mws) # Attaching lat lon to Weibull parameters
     mwss$year<-df2$year[1]
-    mwss$days<-nrow(df2)/8 # Number of days in month
+    mwss$days<-nrow(df2)/8 # Number of days
     mwss$hubhgt<-df2$hubhgt[1]
+    
     return(mwss) # Return parameters
   }
-
+  
   plan(multisession, workers = 3)
   options(future.globals.maxSize= 891289600000)
   system.time(mw<-future_map_dfr(llilevels,multiweibull)) # Data frame of shape and scale parameters for all points
@@ -194,12 +197,71 @@ ncs<-list.files("./Data/ncdf/", full.names = TRUE)
 
 plan(multisession, workers = 3)
 options(future.globals.maxSize= 891289600000)
-system.time(wp<-future_map_dfr(ncs[1:3],annualwind))
+system.time(df<-future_map_dfr(ncs,annualwind))
 
-#write.csv2(wp,"wp.csv") # Save to have on hand in case to save time
+write.csv2(df,"wp.csv") # Save to have on hand in case to save time
 #wp<-read.csv2("wp.csv")
 
+# Checking years and time
+yrtime<-function(param3){
+  nc<-nc_open(param3)
+  d<-data.frame(SVal=numeric(),
+                EVal=numeric(),
+                File=character(),
+                Obs=numeric(),
+                stringsAsFactors=FALSE)
+  newrow<-data.frame(SVal=nc$dim$time$vals[1],EVal=nc$dim$time$vals[length(nc$dim$time$vals)],File=param3,Obs=length(nc$dim$time$vals))
+  d<-rbind(d,newrow)
+  tm<-as.data.frame(utcal.nc("minutes since 1947-07-01 00:00:00", value = nc$dim$time$vals))
+  d<-cbind(d,tm[1,])
 
+  return(d)
+}
+
+system.time(yt<-map_dfr(ncs,yrtime))
+
+# Comparison of historical to future
+
+df5022<-df %>% filter(year<=2022)
+df2200<-df %>% filter(year>2022)
+
+df5022a<-df5022 %>% 
+  group_by(y,x,hubhgt) %>% 
+  summarise(meanws=mean(mean_ws))
+
+df2200a<-df2200 %>% 
+  group_by(y,x,hubhgt) %>% 
+  summarise(meanws=mean(mean_ws))
+
+df5022a<-rename(df5022a,"meanws19502022"="meanws")
+df2200a<-rename(df2200a,"meanws20222100"="meanws")
+
+dfdelta<-left_join(df5022a,df2200a, by = c("y","x","hubhgt"))
+dfdelta$wspctchg<-((dfdelta$meanws20222100-dfdelta$meanws19502022)/dfdelta$meanws19502022)*100
+
+# Plot of change in mean wind speeds between historical and future periods
+dfdelta<-st_as_sf(dfdelta, coords = c("x", "y"),crs=4269, remove = FALSE) 
+dfdelta<-st_transform(dfdelta,st_crs(3857))
+
+quantile(dfdelta$wspctchg, probs = seq(0, 1, 1/10))
+getPalette<-colorRampPalette(brewer.pal(9, "RdBu")) # Function, change if different palette from Colorbrewer is desired
+cols<-getPalette(16) 
+cols<-rev(cols) # Reverse list elements
+cols<-cols[1:11]
+scales::show_col(cols)
+
+dfdelta$wspctchgbreak<-cut(dfdelta$wspctchg, breaks = c(seq(-4,1.5,.5))) # Manually specifying breaks for symbology
+
+ggplot() +
+  geom_sf(data=dfdelta[dfdelta$hubhgt==109,], aes(color=wspctchgbreak, geometry = geometry), size=2) + # Don't use geom_point for sf data! Group here is key to just have changes appear in place, versus moving around # [wp$year<=2022,]
+  scale_color_manual(values = cols, name = "Mean Annual \nWind Speed (m/s)", drop = FALSE) +
+  geom_sf(data = eeza, fill = "transparent", color = "black", inherit.aes = FALSE) +
+  ggthemes::theme_map() +
+  theme(legend.position = c(0.9,0.3), legend.key.size = unit(.5, 'cm'), text=element_text(size=16), panel.border = element_blank(), plot.margin = unit(c(0, 0, 0, 0), "null")) 
+
+st_write(dfdelta,"wp.gpkg")
+
+rm(df2200,df2200a,df5022,df5022a,dfdelta)
 
 
 
@@ -207,6 +269,7 @@ system.time(wp<-future_map_dfr(ncs[1:3],annualwind))
 
 
 # Animation of change in wind speed through time
+
 wp<-st_as_sf(wp, coords = c("lon", "lat"),crs=4269, remove = FALSE) 
 wp<-st_transform(wp,st_crs(3857))
 

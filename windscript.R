@@ -7,7 +7,7 @@ library(renv)
 ## Packages
 #Sys.setenv(RENV_PATHS_RTOOLS = "C:/rtools40/") # https://github.com/rstudio/renv/issues/225
 
-PKG<-c("raster","sf","tidyverse","rgdal","ncdf4","RNetCDF","RColorBrewer","lattice","googledrive","tmap","chron","furrr","nngeo","EnvStats","gganimate","transformr","ggridges", "patchwork", "lmtest", "reshape2")
+PKG<-c("raster","terra","sf","tidyverse","rgdal","ncdf4","RNetCDF","RColorBrewer","lattice","googledrive","tmap","chron","furrr","nngeo","EnvStats","gganimate","transformr","ggridges", "patchwork", "lmtest", "reshape2", "exactextractr")
 
 for (p in PKG) {
   if(!require(p,character.only = TRUE)) {  
@@ -200,7 +200,7 @@ options(future.globals.maxSize= 891289600000)
 system.time(df<-future_map_dfr(ncs,annualwind))
 
 write.csv2(df,"wp.csv") # Save to have on hand in case to save time
-#wp<-read.csv2("wp.csv")
+#df<-read.csv2("wp.csv")
 
 # Checking years and time
 yrtime<-function(param3){
@@ -259,54 +259,57 @@ ggplot() +
   ggthemes::theme_map() +
   theme(legend.position = c(0.9,0.3), legend.key.size = unit(.5, 'cm'), text=element_text(size=16), panel.border = element_blank(), plot.margin = unit(c(0, 0, 0, 0), "null")) 
 
-st_write(dfdelta,"wp.gpkg")
+# st_write(dfdelta,"wp.gpkg")
 
 rm(df2200,df2200a,df5022,df5022a,dfdelta)
 
-
-
-
-
-
 # Animation of change in wind speed through time
 
-wp<-st_as_sf(wp, coords = c("lon", "lat"),crs=4269, remove = FALSE) 
+wp<-st_as_sf(df, coords = c("x", "y"),crs=4269, remove = FALSE) 
 wp<-st_transform(wp,st_crs(3857))
 
-quantile(wp$mean_ws_yr, probs = seq(0, 1, 1/10))
+quantile(wp$mean_ws, probs = seq(0, 1, 1/10))
 getPalette<-colorRampPalette(brewer.pal(9, "Blues")) # Function, change if different palette from Colorbrewer is desired
-cols<-getPalette(11) 
+cols<-getPalette(15) 
 scales::show_col(cols)
 
-wp$mean_ws_yr_f<-cut(wp$mean_ws_yr, breaks = c(seq(2,12,1))) # Manually specifying breaks for symbology
+wp$mean_ws_f<-cut(wp$mean_ws, breaks = c(seq(5,12,0.5))) # Manually specifying breaks for symbology
+labs<-c("5.0-5.5","5.5-6.0","6.0-6.5","6.5-7.0","7.0-7.5","7.5-8.0","8.0-8.5","8.5-9.0","9.0-9.5","9.5-10.0","10.0-10.5","10.5-11.0","11.0-11.5","11.5-12.0")
 
 windtime<-ggplot() +
-  geom_sf(data=wp[wp$year<=2070,], aes(color=mean_ws_yr_f, group=year, geometry = geometry), size=2) + # Don't use geom_point for sf data! Group here is key to just have changes appear in place, versus moving around # [wp$year<=2022,]
+  geom_sf(data=wp[wp$year<=1952,], aes(color=mean_ws_f, group=year, geometry = geometry), size=2) + # Don't use geom_point for sf data! Group here is key to just have changes appear in place, versus moving around # [wp$year<=2022,]
   scale_color_manual(values = cols, labels = c("2-3","3-4","4-5","5-6","6-7","7-8","8-9","9-10","10-11","11-12"), name = "Mean Annual \nWind Speed (m/s) \n{closest_state}", drop = FALSE) +
   geom_sf(data = eeza, fill = "transparent", color = "black", inherit.aes = FALSE) +
   ggthemes::theme_map() +
   theme(legend.position = c(0.9,0.3), legend.key.size = unit(.5, 'cm'), text=element_text(size=16), panel.border = element_blank(), plot.margin = unit(c(0, 0, 0, 0), "null")) + #legend.position = c(0.9,0.5)
-  transition_states(year)
-#labs(title = "Year: {closest_state}")
+  transition_states(year) +
+  labs(title = "Year: {closest_state}")
+
+# ggplot() + # Test for above animation
+#   geom_sf(data=wp[wp$year==1980,], aes(color=mean_ws_f, geometry = geometry), size=2) + # Don't use geom_point for sf data! Group here is key to just have changes appear in place, versus moving around # [wp$year<=2022,]
+#   scale_color_manual(values = cols, labels = labs, name = "Mean Annual \nWind Speed (m/s)", drop = FALSE) +
+#   geom_sf(data = eeza, fill = "transparent", color = "black", inherit.aes = FALSE) +
+#   ggthemes::theme_map() +
+#   theme(legend.position = c(0.9,0.3), legend.key.size = unit(.5, 'cm'), text=element_text(size=16), panel.border = element_blank(), plot.margin = unit(c(0, 0, 0, 0), "null")) #legend.position = c(0.9,0.5)
 
 animate(windtime, nframes = 112, end_pause = 10, height=900, width=1200, renderer = gifski_renderer("./windtime_2020_2070.gif")) # Had to fiddle with nframes to make sure all years were displayed
 
 # Other wind speed plots
-wp$llindex<-interaction(wp$lon,wp$lat,drop = TRUE) # Unique index value for each point
+wp$llindex<-interaction(wp$x,wp$y,drop = TRUE) # Unique index value for each point
 
 wstats<-wp %>% 
   group_by(llindex) %>% 
-  summarise(mean = mean(mean_ws_yr), sd = sd(mean_ws_yr))
+  summarise(mean = mean(mean_ws), sd = sd(mean_ws))
 
-wstats_plot<-ggplot(data=wp, aes(y = mean_ws_yr, x = as.factor(year))) +
-  geom_boxplot()
+wstats_plot<-ggplot(data=wp, aes(y = mean_ws, x = as.factor(year))) +
+  geom_boxplot() 
 
-winddisttime<-ggplot(data=wp[wp$year<=2023,], aes(x = mean_ws_yr, y = as.factor(year))) +
-  geom_density_ridges_gradient(scale = 3, rel_min_height = 0.01)
+winddisttime<-ggplot(data=wp[wp$year<=1983,], aes(x = mean_ws, y = as.factor(year))) +
+  geom_density_ridges_gradient(scale = 3, rel_min_height = 0.01) # Plot of distribution of mean less useful than raw data (or sampled data from Weibull)
 
 wstatsyear<-wp %>% 
   group_by(year) %>% 
-  summarise(mean = mean(mean_ws_yr), sd = sd(mean_ws_yr))
+  summarise(mean = mean(mean_ws), sd = sd(mean_ws))
 
 wstatsyear_plot_mean<-ggplot() +
   geom_line(data=wstatsyear, aes(x = year, y = mean))
@@ -325,13 +328,22 @@ bptest(lm_wind_year) # Unlikely heteroskedastic through time (insig at 5% level 
 eeza10kmbuff<-st_buffer(eeza,dist = 10000)
 csteeza10kmbuff<-st_intersection(cst,eeza10kmbuff) # Creating a limited nearshore polygon to search over for nearest landing point for wind points
 
+xy<-distinct_at(df,vars(x,y)) # Creating a vector layer with one observation per point
+xy<-st_as_sf(xy, coords = c("x", "y"),crs=4269, remove = FALSE) 
+xy<-st_transform(xy,st_crs(3857))
+
 system.time(xy$nearest<-st_nearest_feature(xy,csteeza10kmbuff)) # Finding nearest feature to observation points. Merge using unique wind data points is much quicker than finding distance of nearest for all points for all years.
 system.time(xy$dist<-as.vector(st_distance(xy, csteeza10kmbuff[xy$nearest,], by_element=TRUE))) # Distance to nearest feature
 #csteeza10kmbuff<-csteeza10kmbuff[1,] # Only mainland connection points
 
+globaldem<-rast("./Data/global_dem.tif") # Using terra for raster following https://geocompr.robinlovelace.net/reproj-geo-data.html
+globaldem<-project(globaldem, "EPSG:3857", method = "bilinear")
+
+xy$depth<-extract(globaldem,vect(xy))$global_dem # https://tmieno2.github.io/R-as-GIS-for-Economists/extracting-values-from-raster-layers-for-vector-data.html#extracting-to-points
+
 W<-80 # Number of turbines
-TT<-3.6 # Turbine rated power  
-RD<-120 # Rotor diameter
+TT<-5.0 # Turbine rated power  
+RD<-126 # Rotor diameter
 A<-0.97 # Wind availability (% as fraction)
 EL<-0.98 # Wind energy losses (% as fraction)
 TS<-6410000 # Wind 3.6MW turbine unit cost 
@@ -339,6 +351,7 @@ TL<-10600000 # Wind 5.0MW turbine unit cost
 IC<-305000 # Wind infield cable cost per km
 MF<-1860000 # Wind monopile foundation unit cost
 JF<-2060000 # Wind jacketed foundation unit cost
+FF<-8173000 # Floating foundation unit cost (for ~5MW turbine - https://doi.org/10.3390/jmse8110835)
 TI<-.20 # Wind installation cost as a percentage of CAPEX
 TM<-.08 # Wind miscellaneous costs as a percentage of CAPEX
 TO<-.035 # Wind operations and management costs as a percentage of CAPEX per year
@@ -346,12 +359,13 @@ TD<-.133 # Wind weighted average cost of capital (high discount rate (Levitt, 20
 D<-.070 # Wind decommissioning (occurs at time WDT)
 WDT<-30 # Wind decommissioning year
 AD<-1.225 # Air density in kg/m3 at sea level
-WI<-4 # Cut-in wind speed
+WI<-3 # Cut-in wind speed
 WR<-12.5 # Rated wind speed
-WO<-25 # Cut-out wind speed
+WO<-30 # Cut-out wind speed
+HH<-109 # {109, 187, 239}
 
 xy$trnsc<-ifelse(xy$dist>60000,810000*W*TT+1360000*xy$dist/1000,1090000*W*TT+890000*xy$dist/1000) # Transmission capital cost, uses different functions less/more than 60km. Values are hardcoded in 2012 USD from https://invest-userguide.readthedocs.io/en/latest/wind_energy.html
-xy$wce<-W*(if (TT==3.6) TS else TL)+W*(if (TT==3.6) MF else JF)+W*.91*IC + xy$trnsc # Capex of wind farm equipment, including transmission. Foundations are 3.6MW = Monopile, 5.0MW = Jacketed
+xy$wce<-W*(if (TT==3.6) TS else TL)+W*.91*IC + xy$trnsc + W*ifelse(xy$depth<=-60,FF,MF) # Capex of wind farm equipment, including transmission
 xy$wcapex<-xy$wce/(1-TI-TM) # Total capex with installation and misc costs
 
 xy$womc<-xy$wcapex*TO # Annual O&M Costs 
@@ -378,8 +392,10 @@ result2<-as.vector(unlist(result2))
 
 wp$result<-result
 wp$result2<-result2
-wp$kWh<-wp$days*24*((AD-(1.194*10^(-4))*hub[1])/AD)*TT*(wp$result+wp$result2)*EL*1000*W # Total kWh of farm per year 
+wp$kWh<-365*24*((AD-(1.194*10^(-4))*wp$hubhgt)/AD)*TT*(wp$result+wp$result2)*EL*1000*W # Total kWh of farm per year (doesn't use wp$days instead of 365, but should if I can fix data importing for each year to get all days) 
 #wp$kWh2<-wp$days*24*(TT*1000)*(.087*wp$mean_ws_yr-((TT*1000)/RD^2))*A*EL*W # Validation of above calculation, using alternate method
+
+wp<-wp[wp$hubhgt==HH,]
 
 windowsum<-function(param1,param2){ # Function to calculate lifetime energy production for a wind farm started in year "param1" for site "param2." Returns total kWh, discounted kWh for LCOE, lat/lon, and year
   # param1: year
@@ -388,7 +404,7 @@ windowsum<-function(param1,param2){ # Function to calculate lifetime energy prod
   wp2<-wp[wp$llindex==param2&wp$year>=param1&wp$year<param1+WDT,] # Extracting relevant years and location from dataframe
   #wp2<-wp[wp$llindex=="-82.2669067382812.23.8599700927734"&wp$year>=2020&wp$year<2020+WDT,]
   
-  tdf<-wp2[1,] %>% select(lon,lat) # Extracting lat lon
+  tdf<-wp2[1,] %>% select(x,y) # Extracting lat lon
   tdf$kWhD<-sum(wp2$kWh) # Sum of total energy generation
   wp2$df<-(1/((1+TD)^(wp2$year-param1))) # Discount factor through time
   tdf$kWhDLCOE<-sum(wp2$kWh*wp2$df) # Denominator of LCOE equation
@@ -396,40 +412,59 @@ windowsum<-function(param1,param2){ # Function to calculate lifetime energy prod
   return(tdf)
 }
 
+b<-unique(wp$year)
+
 yearslist<-sort(rep(seq(b[1],b[length(b)],1),length(levels(wp$llindex))))
+
 llindexlist<-rep(levels(wp$llindex),length(seq(b[1],b[length(b)],1)))
 
-system.time(kWhD<-future_map2_dfr(yearslist,llindexlist,windowsum))
+# plan(multisession, workers = 3)
+# options(future.globals.maxSize= 891289600000)
+system.time(kWhD<-map2_dfr(yearslist,llindexlist,windowsum))
 kWhD<-kWhD %>% st_drop_geometry()
-wp<-left_join(wp,kWhD,by = c("lon","lat","year"))
+wp<-left_join(wp,kWhD,by = c("x","y","year"))
 rm(kWhD)
 
 # LCOE
 xydf<-xy %>% st_drop_geometry()
-wp<-merge(wp,xydf,by = c("lon","lat"))  # Merge costs (left_join doesn't work, presumably because of this https://stackoverflow.com/questions/61170525/simple-left-join-isnt-working-on-numeric-vector-to-join-by)
+wp<-merge(wp,xydf,by = c("x","y"))  # Merge costs (left_join doesn't work, presumably because of this https://stackoverflow.com/questions/61170525/simple-left-join-isnt-working-on-numeric-vector-to-join-by)
 wp$LCOE<-wp$pv_costs/wp$kWhDLCOE # Calc LCOE
 rm(xydf)
+
+# Only within EEZ
+wpeez<-st_join(wp,eeza)
+wpeez<-wpeez %>% drop_na()
 
 # Animation of LCOE through time
 getPalette<-colorRampPalette(brewer.pal(9, "Blues")) # Function, change if different palette from Colorbrewer is desired
 cols<-getPalette(11) 
 #scales::show_col(cols)
 
-breaks10LCOE<-quantile(wp$LCOE, probs = seq(0, 1, 1/10))
-wp$LCOE_f<-cut(wp$LCOE, breaks = breaks10LCOE) # Manually specifying breaks for symbology
+breaks10LCOE<-quantile(wpeez$LCOE, probs = seq(0, 1, 1/10))
+wpeez$LCOE_f<-cut(wpeez$LCOE, breaks = breaks10LCOE) # Manually specifying breaks for symbology
+
+ggplot() +
+  geom_sf(data=wpeez[wpeez$year==2022,], aes(color=LCOE_f, geometry = geometry), size=2) + # Don't use geom_point for sf data! Group here is key to just have changes appear in place, versus moving around # [wp$year<=2022,]
+  scale_color_manual(values = cols, labels = levels(wpeez$LCOE_f), name = "Levelized Cost \nof Energy ($/kWh)", drop = FALSE) +
+  geom_sf(data = eeza, fill = "transparent", color = "black", inherit.aes = FALSE) +
+  ggthemes::theme_map() +
+  theme(legend.position = c(0.9,0.3), legend.key.size = unit(.5, 'cm'), text=element_text(size=16), panel.border = element_blank(), plot.margin = unit(c(0, 0, 0, 0), "null"))  #legend.position = c(0.9,0.5)
 
 LCOEtime<-ggplot() +
-  geom_sf(data=wp, aes(color=LCOE_f, group=year, geometry = geometry), size=2) + # Don't use geom_point for sf data! Group here is key to just have changes appear in place, versus moving around # [wp$year<=2022,]
-  scale_color_manual(values = cols, labels = levels(wp$LCOE_f), name = "Levelized Cost \nof Energy ($/kWh) \n{closest_state}", drop = FALSE) +
+  geom_sf(data=wpeez[wpeez$year<=2070,], aes(color=LCOE_f, group=year, geometry = geometry), size=2) + # Don't use geom_point for sf data! Group here is key to just have changes appear in place, versus moving around # [wp$year<=2022,]
+  scale_color_manual(values = cols, labels = levels(wpeez$LCOE_f), name = "Levelized Cost \nof Energy ($/kWh) \n{closest_state}", drop = FALSE) +
   geom_sf(data = eeza, fill = "transparent", color = "black", inherit.aes = FALSE) +
   ggthemes::theme_map() +
   theme(legend.position = c(0.9,0.3), legend.key.size = unit(.5, 'cm'), text=element_text(size=16), panel.border = element_blank(), plot.margin = unit(c(0, 0, 0, 0), "null")) + #legend.position = c(0.9,0.5)
   transition_states(year)
 #labs(title = "Year: {closest_state}")
 
-animate(LCOEtime, nframes = 112, end_pause = 10, height=900, width=1200, renderer = gifski_renderer("./lcoetime_2020_2070.gif")) # Had to fiddle with nframes to make sure all years were displayed
+animate(LCOEtime, nframes = 121, end_pause = 10, height=900, width=1200, renderer = gifski_renderer("./lcoetime_1950_2070.gif")) # Had to fiddle with nframes to make sure all years were displayed
 
+wp5MW<-wpeez %>% 
+  select(x,y,shape,scale,mean_ws,year,hubhgt,kWh,depth,LCOE)
 
+write.csv(wp5MW,"wp5MW.csv")
 # # Valuation options
 # 1. Change in (LCOE) locations through time, assuming constant technology, using USD 2020 (normalize by area to capture economies of scale)
 # 2. Net present value calculation of build out, inclusive of externalities?

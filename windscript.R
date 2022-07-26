@@ -221,7 +221,6 @@ yrtime<-function(param3){
 system.time(yt<-map_dfr(ncs,yrtime))
 
 # Comparison of historical to future
-
 df5022<-df %>% filter(year<=2022)
 df2200<-df %>% filter(year>2022)
 
@@ -252,12 +251,16 @@ scales::show_col(cols)
 
 dfdelta$wspctchgbreak<-cut(dfdelta$wspctchg, breaks = c(seq(-4,1.5,.5))) # Manually specifying breaks for symbology
 
+zoom<-0.05
+zoom1<-1+zoom
+zoom2<-1-zoom
 ggplot() +
-  geom_sf(data=dfdelta[dfdelta$hubhgt==109,], aes(color=wspctchgbreak, geometry = geometry), size=2) + # Don't use geom_point for sf data! Group here is key to just have changes appear in place, versus moving around # [wp$year<=2022,]
-  scale_color_manual(values = cols, name = "Mean Annual \nWind Speed (m/s)", drop = FALSE) +
+  geom_sf(data=dfdelta[dfdelta$hubhgt==109,], aes(color=wspctchgbreak, geometry = geometry), size=4) + # Don't use geom_point for sf data! Group here is key to just have changes appear in place, versus moving around # [wp$year<=2022,]
+  scale_color_manual(values = cols, labels = c("-4 to -3.5","-3.5 to -3.0","-3.0 to -2.5","-2.5 to -2.0","-2.0 to -1.5","-1.5 to -1.0","-1.0 to -0.5","-0.5 to 0","0 to 0.5","0.5 to 1.0","1.0 to 1.5"), name = "% Change in Mean\nAnnual Wind Speed\n1950-2022 to 2023-2100\n(RCP 8.5)", drop = FALSE) +
   geom_sf(data = eeza, fill = "transparent", color = "black", inherit.aes = FALSE) +
   ggthemes::theme_map() +
-  theme(legend.position = c(0.9,0.3), legend.key.size = unit(.5, 'cm'), text=element_text(size=16), panel.border = element_blank(), plot.margin = unit(c(0, 0, 0, 0), "null")) 
+  theme(legend.position = c(0.90,0.3), legend.key.size = unit(.5, 'cm'), text=element_text(size=16), panel.border = element_blank(), plot.margin = unit(c(0, 0, 0, 0), "null")) +
+  coord_sf(xlim = c(-8759594.92*zoom1,-7005950.04*zoom2),ylim = c(3856366.25*zoom2,6047253.88*zoom1), expand = FALSE) # range(dfdelta$x) https://epsg.io/transform#s_srs=4326&t_srs=3857 
 
 # st_write(dfdelta,"wp.gpkg")
 
@@ -292,7 +295,7 @@ windtime<-ggplot() +
 #   ggthemes::theme_map() +
 #   theme(legend.position = c(0.9,0.3), legend.key.size = unit(.5, 'cm'), text=element_text(size=16), panel.border = element_blank(), plot.margin = unit(c(0, 0, 0, 0), "null")) #legend.position = c(0.9,0.5)
 
-animate(windtime, nframes = 112, end_pause = 10, height=900, width=1200, renderer = gifski_renderer("./windtime_2020_2070.gif")) # Had to fiddle with nframes to make sure all years were displayed
+gganimate::animate(windtime, nframes = 112, end_pause = 10, height=900, width=1200, renderer = gifski_renderer("./windtime_2020_2070.gif")) # Had to fiddle with nframes to make sure all years were displayed
 
 # Other wind speed plots
 wp$llindex<-interaction(wp$x,wp$y,drop = TRUE) # Unique index value for each point
@@ -459,12 +462,57 @@ LCOEtime<-ggplot() +
   transition_states(year)
 #labs(title = "Year: {closest_state}")
 
-animate(LCOEtime, nframes = 121, end_pause = 10, height=900, width=1200, renderer = gifski_renderer("./lcoetime_1950_2070.gif")) # Had to fiddle with nframes to make sure all years were displayed
+system.time(gganimate::animate(LCOEtime, nframes = 321, end_pause = 10, height=900, width=1200, renderer = gifski_renderer("./lcoetime_1950_2070.gif"))) # Had to fiddle with nframes to make sure all years were displayed
 
-wp5MW<-wpeez %>% 
-  select(x,y,shape,scale,mean_ws,year,hubhgt,kWh,depth,LCOE)
+wp5mw<-wpeez %>% 
+  select(x,y,shape,scale,mean_ws,year,hubhgt,kWh,kWhD,depth,LCOE)
 
-write.csv(wp5MW,"wp5MW.csv")
+#st_write(wp5MW,"wp5mw.gpkg")
+
+# Comparison of historical to future
+wp5mw<-wp5mw %>% st_drop_geometry()
+
+wp5022<-wp5mw %>% filter(year<=2022)
+wp2270<-wp5mw %>% filter(year>2022&year<=2070)
+
+wp5022a<-wp5022 %>% 
+  group_by(y,x,hubhgt) %>% 
+  summarise(meanLCOE=mean(LCOE))
+
+wp2270a<-wp2270 %>% 
+  group_by(y,x,hubhgt) %>% 
+  summarise(meanLCOE=mean(LCOE))
+
+wp5022a<-rename(wp5022a,"LCOE19502022"="meanLCOE")
+wp2270a<-rename(wp2270a,"LCOE20222070"="meanLCOE")
+
+wpdelta<-left_join(wp5022a,wp2270a, by = c("y","x","hubhgt"))
+wpdelta$LCOEpctchg<-((wpdelta$LCOE20222070-wpdelta$LCOE19502022)/wpdelta$LCOE19502022)*100
+
+# Plot of change in mean wind speeds between historical and future periods
+wpdelta<-st_as_sf(wpdelta, coords = c("x", "y"),crs=4269, remove = FALSE) 
+wpdelta<-st_transform(wpdelta,st_crs(3857))
+
+quantile(wpdelta$LCOEpctchg, probs = seq(0, 1, 1/10))
+getPalette<-colorRampPalette(brewer.pal(9, "Blues")) # Function, change if different palette from Colorbrewer is desired
+cols<-getPalette(11) 
+#cols<-rev(cols) # Reverse list elements
+cols<-cols[1:11]
+scales::show_col(cols)
+
+wpdelta$LCOEpctchgbreak<-cut(wpdelta$LCOEpctchg, breaks = c(seq(.5,4.5,.5))) # Manually specifying breaks for symbology
+
+zoom<-0.05
+zoom1<-1+zoom
+zoom2<-1-zoom
+ggplot() +
+  geom_sf(data=wpdelta[wpdelta$hubhgt==109,], aes(color=LCOEpctchgbreak, geometry = geometry), size=4) + # Don't use geom_point for sf data! Group here is key to just have changes appear in place, versus moving around # [wp$year<=2022,]
+  scale_color_manual(values = cols, labels = c("0.5 to 1","1.0 to 1.5","1.5 to 2.0","2.0 to 2.5","2.5 to 3.0","3.0 to 3.5","3.5 to 4.0","4.0 to 4.5"), name = "% Change in Levelized\nCost of Energy\n1950-2022 to 2023-2100\n(RCP 8.5)", drop = FALSE) +
+  geom_sf(data = eeza, fill = "transparent", color = "black", inherit.aes = FALSE) +
+  ggthemes::theme_map() +
+  theme(legend.position = c(0.90,0.3), legend.key.size = unit(.5, 'cm'), text=element_text(size=16), panel.border = element_blank(), plot.margin = unit(c(0, 0, 0, 0), "null")) +
+  coord_sf(xlim = c(-8759594.92*zoom1,-7005950.04*zoom2),ylim = c(3856366.25*zoom2,6047253.88*zoom1), expand = FALSE) # range(dfdelta$x) https://epsg.io/transform#s_srs=4326&t_srs=3857 
+
 # # Valuation options
 # 1. Change in (LCOE) locations through time, assuming constant technology, using USD 2020 (normalize by area to capture economies of scale)
 # 2. Net present value calculation of build out, inclusive of externalities?
